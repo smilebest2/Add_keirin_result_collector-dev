@@ -535,6 +535,9 @@ def page(title: str, active: str, body: str) -> str:
       font-size: 11px;
       font-weight: 700;
     }}
+    tr.analysis-selected td {{
+      background: #e8f1f8;
+    }}
     .filters {{
       display: grid;
       grid-template-columns: repeat(4, minmax(130px, 1fr));
@@ -2451,23 +2454,70 @@ def prediction_score_result_analysis_rows(result_rows: list[dict]) -> list[dict]
     return analysis_rows
 
 
-def component_result_summary_rows(result_rows: list[dict]) -> list[dict]:
-    buckets: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
+def component_verdict(count: int, top3_rate: float, roi: float) -> str:
+    if count < 10:
+        return "要観察"
+    if roi >= 100 or top3_rate >= 65:
+        return "強化候補"
+    if top3_rate < 35 and roi < 60:
+        return "弱化候補"
+    return "継続"
+
+
+def component_result_analysis_rows(result_rows: list[dict]) -> list[dict]:
+    analysis_rows = []
     for row in result_rows:
         actual_top3 = {row.get("actual_1st"), row.get("actual_2nd"), row.get("actual_3rd")}
+        stake = int(row.get("result_stake_amount") or row.get("stake_amount") or 0)
+        returned = int(row.get("return_amount") or 0)
         for detail in parse_score_detail_json(row):
             car_no = detail.get("car_no")
             for component_type, components in [
                 ("基礎", detail.get("base_components") or {}),
                 ("タイプ補正", detail.get("type_components") or {}),
             ]:
-                for name, value in components.items():
-                    buckets[(row.get("prediction_type"), component_type, name)].append({
-                        "value": float(value or 0),
-                        "is_first": row.get("actual_1st") == car_no,
-                        "is_top3": car_no in actual_top3,
-                        "hit_exact": bool(row.get("hit_exact")),
+                for component_name, value in components.items():
+                    analysis_rows.append({
+                        "race_date": row.get("race_date"),
+                        "prediction_type": row.get("prediction_type"),
+                        "race": f'{row.get("venue") or ""} {row.get("race_no") or ""}R',
+                        "confidence": row.get("confidence") or "C",
+                        "component_type": component_type,
+                        "component_name": component_name,
+                        "component_value": decimal(value, 1),
+                        "pick_order": len(analysis_rows) + 1,
+                        "car_no": car_no,
+                        "racer_name": detail.get("racer_name"),
+                        "base_score": decimal(detail.get("base_score"), 1),
+                        "final_score": decimal(detail.get("final_score"), 1),
+                        "actual_rank": actual_rank_for_car(row, car_no),
+                        "is_first": "○" if row.get("actual_1st") == car_no else "×",
+                        "is_top3": "○" if car_no in actual_top3 else "×",
+                        "judgment": prediction_result_label(row),
+                        "prediction": prediction_combo(row),
+                        "return_amount": yen(returned),
+                        "_data": {
+                            "race-date": row.get("race_date") or "",
+                            "prediction-type": row.get("prediction_type") or "",
+                            "confidence": row.get("confidence") or "C",
+                            "component-type": component_type,
+                            "component-name": component_name,
+                        },
+                        "_raw_value": float(value or 0),
+                        "_raw_final_score": float(detail.get("final_score") or 0),
+                        "_raw_stake": stake,
+                        "_raw_return": returned,
+                        "_raw_is_first": row.get("actual_1st") == car_no,
+                        "_raw_is_top3": car_no in actual_top3,
+                        "_raw_hit_exact": bool(row.get("hit_exact")),
                     })
+    return analysis_rows
+
+
+def component_result_summary_rows(component_rows: list[dict]) -> list[dict]:
+    buckets: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
+    for row in component_rows:
+        buckets[(row.get("prediction_type"), row.get("component_type"), row.get("component_name"))].append(row)
     summary_rows = []
     for (prediction_type, component_type, component_name), items in sorted(
         buckets.items(),
@@ -2476,17 +2526,128 @@ def component_result_summary_rows(result_rows: list[dict]) -> list[dict]:
         count = len(items)
         if not count:
             continue
+        first_rate = sum(1 for item in items if item["_raw_is_first"]) * 100 / count
+        top3_rate = sum(1 for item in items if item["_raw_is_top3"]) * 100 / count
+        exact_rate = sum(1 for item in items if item["_raw_hit_exact"]) * 100 / count
+        stake = sum(item["_raw_stake"] for item in items)
+        returned = sum(item["_raw_return"] for item in items)
+        roi = returned * 100 / stake if stake else 0
+        verdict = component_verdict(count, top3_rate, roi)
         summary_rows.append({
             "prediction_type": prediction_type,
             "component_type": component_type,
             "component_name": component_name,
             "count": count,
-            "avg_value": decimal(sum(item["value"] for item in items) / count, 1),
-            "first_rate": pct(sum(1 for item in items if item["is_first"]) * 100 / count),
-            "top3_rate": pct(sum(1 for item in items if item["is_top3"]) * 100 / count),
-            "exact_rate": pct(sum(1 for item in items if item["hit_exact"]) * 100 / count),
+            "avg_value": decimal(sum(item["_raw_value"] for item in items) / count, 1),
+            "avg_final_score": decimal(sum(item["_raw_final_score"] for item in items) / count, 1),
+            "first_rate": pct(first_rate),
+            "top3_rate": pct(top3_rate),
+            "exact_rate": pct(exact_rate),
+            "roi": pct(roi),
+            "verdict": pill(verdict),
+            "_class": sample_class(count, 10),
+            "_data": {
+                "prediction-type": prediction_type,
+                "component-type": component_type,
+                "component-name": component_name,
+                "count": count,
+                "verdict": verdict,
+            },
         })
     return summary_rows
+
+
+def select_options(values: list[str]) -> str:
+    return "".join(f'<option value="{h(value)}">{h(value)}</option>' for value in values if value)
+
+
+def render_component_result_analysis(summary_rows: list[dict], detail_rows: list[dict]) -> str:
+    dates = sorted({row.get("race_date") for row in detail_rows if row.get("race_date")}, reverse=True)
+    component_types = sorted({row.get("component_type") for row in detail_rows if row.get("component_type")})
+    component_names = sorted({row.get("component_name") for row in detail_rows if row.get("component_name")})
+    detail_display_rows = sorted(
+        detail_rows,
+        key=lambda row: (
+            row.get("race_date") or "",
+            prediction_type_order(row.get("prediction_type") or ""),
+            row.get("component_type") or "",
+            row.get("component_name") or "",
+            row.get("race") or "",
+        ),
+        reverse=True,
+    )[:PREDICTION_ANALYSIS_ROW_LIMIT]
+    return f"""
+      <div class="filters" id="component-analysis-filters">
+        <label>対象日<select id="component-filter-date"><option value="">すべて</option>{select_options(dates)}</select></label>
+        <label>予想タイプ<select id="component-filter-type"><option value="">すべて</option>{select_options(PREDICTION_TYPE_ORDER)}</select></label>
+        <label>補正種別<select id="component-filter-kind"><option value="">すべて</option>{select_options(component_types)}</select></label>
+        <label>補正項目<select id="component-filter-name"><option value="">すべて</option>{select_options(component_names)}</select></label>
+        <label>信頼度<select id="component-filter-confidence"><option value="">すべて</option><option value="A">A</option><option value="B">B</option><option value="C">C</option></select></label>
+        <label>採用数下限<input id="component-filter-count" type="number" min="0" step="1" placeholder="指定なし"></label>
+        <label>判定<select id="component-filter-verdict"><option value="">すべて</option><option value="強化候補">強化候補</option><option value="継続">継続</option><option value="弱化候補">弱化候補</option><option value="要観察">要観察</option></select></label>
+      </div>
+      <section>
+        <h3>補正項目別 成績サマリー</h3>
+        {rich_table(
+            ["予想タイプ", "補正種別", "補正項目", "採用数", "1着率", "3着内率", "完全的中率", "平均補正値", "平均最終点", "回収率", "判定"],
+            summary_rows,
+            ["prediction_type", "component_type", "component_name", "count", "first_rate", "top3_rate", "exact_rate", "avg_value", "avg_final_score", "roi", "verdict"],
+        ).replace("<table>", '<table id="component-summary-table">', 1)}
+      </section>
+      <section>
+        <h3>補正項目別 採用明細</h3>
+        {table(
+            ["対象日", "レース", "予想タイプ", "信頼度", "補正種別", "補正項目", "補正値", "車番", "選手", "基礎点", "最終点", "実着順", "1着", "3着内", "判定", "買い目", "回収額"],
+            detail_display_rows,
+            ["race_date", "race", "prediction_type", "confidence", "component_type", "component_name", "component_value", "car_no", "racer_name", "base_score", "final_score", "actual_rank", "is_first", "is_top3", "judgment", "prediction", "return_amount"],
+        ).replace("<table>", '<table id="component-detail-table">', 1)}
+      </section>
+      <script>
+      (() => {{
+        const summaryTable = document.getElementById("component-summary-table");
+        const detailTable = document.getElementById("component-detail-table");
+        if (!summaryTable || !detailTable) return;
+        const date = document.getElementById("component-filter-date");
+        const type = document.getElementById("component-filter-type");
+        const kind = document.getElementById("component-filter-kind");
+        const name = document.getElementById("component-filter-name");
+        const confidence = document.getElementById("component-filter-confidence");
+        const count = document.getElementById("component-filter-count");
+        const verdict = document.getElementById("component-filter-verdict");
+        const summaryRows = Array.from(summaryTable.querySelectorAll("tbody tr"));
+        const detailRows = Array.from(detailTable.querySelectorAll("tbody tr"));
+        const matches = (row, includeConfidence, includeCount, includeVerdict) => {{
+          if (date.value && row.dataset.raceDate && row.dataset.raceDate !== date.value) return false;
+          if (type.value && row.dataset.predictionType !== type.value) return false;
+          if (kind.value && row.dataset.componentType !== kind.value) return false;
+          if (name.value && row.dataset.componentName !== name.value) return false;
+          if (includeConfidence && confidence.value && row.dataset.confidence !== confidence.value) return false;
+          if (includeCount && count.value && Number(row.dataset.count || 0) < Number(count.value)) return false;
+          if (includeVerdict && verdict.value && row.dataset.verdict !== verdict.value) return false;
+          return true;
+        }};
+        const apply = () => {{
+          summaryRows.forEach((row) => {{
+            row.hidden = !matches(row, false, true, true);
+          }});
+          detailRows.forEach((row) => {{
+            row.hidden = !matches(row, true, false, false);
+          }});
+        }};
+        summaryRows.forEach((row) => {{
+          row.addEventListener("click", () => {{
+            summaryRows.forEach((item) => item.classList.remove("analysis-selected"));
+            row.classList.add("analysis-selected");
+            type.value = row.dataset.predictionType || "";
+            kind.value = row.dataset.componentType || "";
+            name.value = row.dataset.componentName || "";
+            apply();
+          }});
+        }});
+        [date, type, kind, name, confidence, count, verdict].forEach((item) => item.addEventListener("change", apply));
+      }})();
+      </script>
+    """
 
 
 def prediction_rows_for_date(conn, target_date: str | None) -> list[dict]:
@@ -3012,17 +3173,18 @@ def render_prediction_results(conn) -> str:
 
     if is_dev_environment():
         result_analysis_rows = prediction_score_result_analysis_rows(result_rows)[:PREDICTION_ANALYSIS_ROW_LIMIT]
-        component_summary_rows = component_result_summary_rows(result_rows)[:COMPONENT_ANALYSIS_ROW_LIMIT]
+        component_detail_rows = component_result_analysis_rows(result_rows)
+        component_summary_rows = component_result_summary_rows(component_detail_rows)[:COMPONENT_ANALYSIS_ROW_LIMIT]
         body += section("予想補正値 結果分析", table(
             ["対象日", "予想タイプ", "レース", "信頼度", "買い目順", "車番", "選手", "基礎点", "タイプ補正", "最終点", "タイプ補正内訳", "実着順", "1着", "3着内", "判定", "回収額", "モデル"],
             result_analysis_rows,
             ["race_date", "prediction_type", "race", "confidence", "pick_order", "car_no", "racer_name", "base_score", "type_adjustment", "final_score", "type_components", "actual_rank", "is_first", "is_top3", "judgment", "return_amount", "model_version"],
         ), "dev環境のみ表示します。補正で選ばれた車番が実際に1着・3着内へ入ったかを確認するための表です。")
-        body += section("補正名別 成績分析", table(
-            ["予想タイプ", "補正種別", "補正名", "件数", "平均補正値", "1着率", "3着内率", "完全的中率"],
-            component_summary_rows,
-            ["prediction_type", "component_type", "component_name", "count", "avg_value", "first_rate", "top3_rate", "exact_rate"],
-        ), "dev環境のみ表示します。補正名ごとに、選ばれた車番が結果に結びついたかを集計します。")
+        body += section(
+            "補正項目別 成績分析",
+            render_component_result_analysis(component_summary_rows, component_detail_rows),
+            "dev環境のみ表示します。補正ごとの傾向を一覧で見て、気になる補正をクリックすると採用明細を絞り込めます。",
+        )
 
     details = []
     for row in sorted(

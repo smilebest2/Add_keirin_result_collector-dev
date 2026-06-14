@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>レース一覧 | 競輪統計</title>
+  <title>[DEV] レース一覧 | 競輪統計</title>
   <style>
     :root {
       --bg: #f5f7f9;
@@ -337,6 +337,9 @@
       font-size: 11px;
       font-weight: 700;
     }
+    tr.analysis-selected td {
+      background: #e8f1f8;
+    }
     .filters {
       display: grid;
       grid-template-columns: repeat(4, minmax(130px, 1fr));
@@ -491,8 +494,8 @@
     }
   </style>
 </head>
-<body>
-
+<body class="is-dev">
+  <div class="env-banner">DEV環境</div>
   <header>
     <div class="wrap">
       <h1>レース一覧</h1>
