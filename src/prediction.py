@@ -7,7 +7,7 @@ from .db import connect, init_db
 
 
 JST = timezone(timedelta(hours=9))
-TRIFECTA = "3騾｣蜊・"
+TRIFECTA = "3連単"
 STAKE_AMOUNT = 100
 MODEL_VERSION = "explainable-v1"
 
@@ -484,7 +484,17 @@ def evaluate_predictions(conn) -> int:
         JOIN race_master m ON m.race_id = p.race_id
         LEFT JOIN race_prediction_result pr ON pr.prediction_id = p.id
         WHERE pr.id IS NULL
+           OR (
+                pr.payout IS NULL
+                AND EXISTS (
+                    SELECT 1
+                    FROM payout pay
+                    WHERE pay.race_id = p.race_id
+                      AND pay.bet_type = ?
+                )
+           )
         """,
+        (TRIFECTA,),
     )
     checked = 0
     for prediction in predictions:
