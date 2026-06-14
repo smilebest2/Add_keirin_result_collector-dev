@@ -538,6 +538,144 @@ def page(title: str, active: str, body: str) -> str:
     tr.analysis-selected td {{
       background: #e8f1f8;
     }}
+    .analysis-dashboard {{
+      display: grid;
+      gap: 14px;
+      padding: 14px 15px 16px;
+    }}
+    .analysis-metrics {{
+      display: grid;
+      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      gap: 10px;
+    }}
+    .analysis-metric {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fbfcfd;
+    }}
+    .analysis-metric span {{
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }}
+    .analysis-metric strong {{
+      font-size: 20px;
+    }}
+    .analysis-panels {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(260px, 1fr));
+      gap: 14px;
+    }}
+    .analysis-panel {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #ffffff;
+      min-width: 0;
+    }}
+    .analysis-panel h3 {{
+      margin: 0 0 10px;
+      font-size: 15px;
+    }}
+    .analysis-bars {{
+      display: grid;
+      gap: 8px;
+    }}
+    .analysis-bar-row {{
+      display: grid;
+      grid-template-columns: minmax(92px, 150px) 1fr minmax(54px, auto);
+      gap: 8px;
+      align-items: center;
+      font-size: 12px;
+    }}
+    .analysis-bar-track {{
+      height: 9px;
+      border-radius: 999px;
+      background: #edf1f4;
+      overflow: hidden;
+    }}
+    .analysis-bar-fill {{
+      height: 100%;
+      border-radius: 999px;
+      background: var(--accent);
+    }}
+    .analysis-ranking {{
+      display: grid;
+      gap: 7px;
+    }}
+    .analysis-rank-item {{
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: center;
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 9px;
+      background: #fbfcfd;
+      color: var(--ink);
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+    }}
+    .analysis-rank-item span {{
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 2px;
+    }}
+    .analysis-scatter {{
+      position: relative;
+      height: 260px;
+      border-left: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      background:
+        linear-gradient(#eef2f5 1px, transparent 1px),
+        linear-gradient(90deg, #eef2f5 1px, transparent 1px);
+      background-size: 100% 25%, 25% 100%;
+      margin: 6px 4px 20px 22px;
+    }}
+    .analysis-point {{
+      position: absolute;
+      transform: translate(-50%, 50%);
+      border: 0;
+      border-radius: 999px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 0;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(29, 78, 116, 0.24);
+    }}
+    .analysis-point.verdict-strong {{ background: var(--accent-2); }}
+    .analysis-point.verdict-weak {{ background: var(--accent-3); }}
+    .analysis-point.verdict-watch {{ background: #8a6d3b; }}
+    .analysis-axis-note {{
+      color: var(--muted);
+      font-size: 12px;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: -12px;
+    }}
+    .analysis-detail-toggle {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      overflow: hidden;
+    }}
+    .analysis-detail-toggle summary {{
+      cursor: pointer;
+      padding: 12px 14px;
+      font-weight: 700;
+      color: var(--accent);
+      background: #fbfcfd;
+    }}
+    .analysis-detail-toggle .section-lead {{
+      padding: 0 14px 10px;
+    }}
     .filters {{
       display: grid;
       grid-template-columns: repeat(4, minmax(130px, 1fr));
@@ -688,6 +826,10 @@ def page(title: str, active: str, body: str) -> str:
       .bar-row {{ grid-template-columns: 96px minmax(130px, 1fr) 74px; }}
       .filters {{ grid-template-columns: repeat(2, minmax(120px, 1fr)); }}
       .prediction-type-grid {{ grid-template-columns: 1fr; }}
+      .analysis-metrics {{ grid-template-columns: repeat(2, minmax(120px, 1fr)); }}
+      .analysis-panels {{ grid-template-columns: 1fr; }}
+      .analysis-bar-row {{ grid-template-columns: 96px minmax(120px, 1fr) 58px; }}
+      .analysis-scatter {{ min-width: 520px; }}
       h1 {{ font-size: 24px; }}
     }}
   </style>
@@ -2502,6 +2644,14 @@ def component_result_analysis_rows(result_rows: list[dict]) -> list[dict]:
                             "confidence": row.get("confidence") or "C",
                             "component-type": component_type,
                             "component-name": component_name,
+                            "is-first": "1" if row.get("actual_1st") == car_no else "0",
+                            "is-top3": "1" if car_no in actual_top3 else "0",
+                            "hit-exact": "1" if row.get("hit_exact") else "0",
+                            "stake": stake,
+                            "return": returned,
+                            "final-score": float(detail.get("final_score") or 0),
+                            "component-value": float(value or 0),
+                            "judgment": prediction_result_label(row),
                         },
                         "_raw_value": float(value or 0),
                         "_raw_final_score": float(detail.get("final_score") or 0),
@@ -2586,22 +2736,54 @@ def render_component_result_analysis(summary_rows: list[dict], detail_rows: list
         <label>採用数下限<input id="component-filter-count" type="number" min="0" step="1" placeholder="指定なし"></label>
         <label>判定<select id="component-filter-verdict"><option value="">すべて</option><option value="強化候補">強化候補</option><option value="継続">継続</option><option value="弱化候補">弱化候補</option><option value="要観察">要観察</option></select></label>
       </div>
-      <section>
-        <h3>補正項目別 成績サマリー</h3>
-        {rich_table(
-            ["予想タイプ", "補正種別", "補正項目", "採用数", "1着率", "3着内率", "完全的中率", "平均補正値", "平均最終点", "回収率", "判定"],
-            summary_rows,
-            ["prediction_type", "component_type", "component_name", "count", "first_rate", "top3_rate", "exact_rate", "avg_value", "avg_final_score", "roi", "verdict"],
-        ).replace("<table>", '<table id="component-summary-table">', 1)}
-      </section>
-      <section>
-        <h3>補正項目別 採用明細</h3>
-        {table(
+      <div class="analysis-dashboard">
+        <div class="analysis-metrics">
+          <div class="analysis-metric"><span>採用数</span><strong id="component-metric-count">-</strong></div>
+          <div class="analysis-metric"><span>1着率</span><strong id="component-metric-first">-</strong></div>
+          <div class="analysis-metric"><span>3着内率</span><strong id="component-metric-top3">-</strong></div>
+          <div class="analysis-metric"><span>完全的中率</span><strong id="component-metric-exact">-</strong></div>
+          <div class="analysis-metric"><span>回収率</span><strong id="component-metric-roi">-</strong></div>
+        </div>
+        <div class="analysis-panels">
+          <div class="analysis-panel">
+            <h3>予想タイプ別 3着内率</h3>
+            <div class="analysis-bars" id="component-type-bars"></div>
+          </div>
+          <div class="analysis-panel">
+            <h3>判定分布</h3>
+            <div class="analysis-bars" id="component-verdict-bars"></div>
+          </div>
+          <div class="analysis-panel">
+            <h3>回収率 TOP10</h3>
+            <div class="analysis-ranking" id="component-roi-ranking"></div>
+          </div>
+          <div class="analysis-panel">
+            <h3>弱化候補</h3>
+            <div class="analysis-ranking" id="component-risk-ranking"></div>
+          </div>
+        </div>
+        <div class="analysis-panel">
+          <h3>補正項目マップ</h3>
+          <div class="analysis-scatter" id="component-scatter"></div>
+          <div class="analysis-axis-note"><span>横: 採用数</span><span>縦: 3着内率</span><span>大きさ: 回収率</span></div>
+        </div>
+        <div class="analysis-panel">
+          <h3>補正項目別 成績サマリー</h3>
+          <table id="component-summary-table">
+            <thead><tr><th>予想タイプ</th><th>補正種別</th><th>補正項目</th><th>採用数</th><th>1着率</th><th>3着内率</th><th>完全的中率</th><th>平均補正値</th><th>平均最終点</th><th>回収率</th><th>判定</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <details class="analysis-detail-toggle">
+          <summary>採用明細を開く</summary>
+          <p class="section-lead">現在のフィルタと選択中の補正項目に合わせて明細を絞り込みます。表示は最大200件です。</p>
+          {table(
             ["対象日", "レース", "予想タイプ", "信頼度", "補正種別", "補正項目", "補正値", "車番", "選手", "基礎点", "最終点", "実着順", "1着", "3着内", "判定", "買い目", "回収額"],
             detail_display_rows,
             ["race_date", "race", "prediction_type", "confidence", "component_type", "component_name", "component_value", "car_no", "racer_name", "base_score", "final_score", "actual_rank", "is_first", "is_top3", "judgment", "prediction", "return_amount"],
-        ).replace("<table>", '<table id="component-detail-table">', 1)}
-      </section>
+          ).replace("<table>", '<table id="component-detail-table">', 1)}
+        </details>
+      </div>
       <script>
       (() => {{
         const summaryTable = document.getElementById("component-summary-table");
@@ -2614,37 +2796,190 @@ def render_component_result_analysis(summary_rows: list[dict], detail_rows: list
         const confidence = document.getElementById("component-filter-confidence");
         const count = document.getElementById("component-filter-count");
         const verdict = document.getElementById("component-filter-verdict");
-        const summaryRows = Array.from(summaryTable.querySelectorAll("tbody tr"));
+        const summaryBody = summaryTable.querySelector("tbody");
         const detailRows = Array.from(detailTable.querySelectorAll("tbody tr"));
-        const matches = (row, includeConfidence, includeCount, includeVerdict) => {{
+        const number = (value) => Number(value || 0);
+        const pct = (value) => `${{value.toFixed(1)}}%`;
+        const yen = (value) => `${{Math.round(value).toLocaleString()}}円`;
+        const rowMatches = (row) => {{
           if (date.value && row.dataset.raceDate && row.dataset.raceDate !== date.value) return false;
           if (type.value && row.dataset.predictionType !== type.value) return false;
           if (kind.value && row.dataset.componentType !== kind.value) return false;
           if (name.value && row.dataset.componentName !== name.value) return false;
-          if (includeConfidence && confidence.value && row.dataset.confidence !== confidence.value) return false;
-          if (includeCount && count.value && Number(row.dataset.count || 0) < Number(count.value)) return false;
-          if (includeVerdict && verdict.value && row.dataset.verdict !== verdict.value) return false;
+          if (confidence.value && row.dataset.confidence !== confidence.value) return false;
           return true;
         }};
-        const apply = () => {{
-          summaryRows.forEach((row) => {{
-            row.hidden = !matches(row, false, true, true);
+        const verdictFor = (item) => {{
+          if (item.count < 10) return "要観察";
+          if (item.roi >= 100 || item.top3Rate >= 65) return "強化候補";
+          if (item.top3Rate < 35 && item.roi < 60) return "弱化候補";
+          return "継続";
+        }};
+        const verdictClass = (value) => {{
+          if (value === "強化候補") return "verdict-strong";
+          if (value === "弱化候補") return "verdict-weak";
+          if (value === "要観察") return "verdict-watch";
+          return "";
+        }};
+        const aggregate = (rows) => {{
+          const groups = new Map();
+          rows.forEach((row) => {{
+            const key = [row.dataset.predictionType, row.dataset.componentType, row.dataset.componentName].join("\\t");
+            if (!groups.has(key)) {{
+              groups.set(key, {{
+                predictionType: row.dataset.predictionType || "",
+                componentType: row.dataset.componentType || "",
+                componentName: row.dataset.componentName || "",
+                count: 0,
+                first: 0,
+                top3: 0,
+                exact: 0,
+                stake: 0,
+                returned: 0,
+                valueTotal: 0,
+                finalTotal: 0,
+              }});
+            }}
+            const item = groups.get(key);
+            item.count += 1;
+            item.first += row.dataset.isFirst === "1" ? 1 : 0;
+            item.top3 += row.dataset.isTop3 === "1" ? 1 : 0;
+            item.exact += row.dataset.hitExact === "1" ? 1 : 0;
+            item.stake += number(row.dataset.stake);
+            item.returned += number(row.dataset.return);
+            item.valueTotal += number(row.dataset.componentValue);
+            item.finalTotal += number(row.dataset.finalScore);
           }});
-          detailRows.forEach((row) => {{
-            row.hidden = !matches(row, true, false, false);
+          return Array.from(groups.values()).map((item) => {{
+            item.firstRate = item.count ? item.first * 100 / item.count : 0;
+            item.top3Rate = item.count ? item.top3 * 100 / item.count : 0;
+            item.exactRate = item.count ? item.exact * 100 / item.count : 0;
+            item.roi = item.stake ? item.returned * 100 / item.stake : 0;
+            item.avgValue = item.count ? item.valueTotal / item.count : 0;
+            item.avgFinal = item.count ? item.finalTotal / item.count : 0;
+            item.verdict = verdictFor(item);
+            return item;
+          }}).filter((item) => {{
+            if (count.value && item.count < Number(count.value)) return false;
+            if (verdict.value && item.verdict !== verdict.value) return false;
+            return true;
           }});
         }};
-        summaryRows.forEach((row) => {{
-          row.addEventListener("click", () => {{
-            summaryRows.forEach((item) => item.classList.remove("analysis-selected"));
-            row.classList.add("analysis-selected");
-            type.value = row.dataset.predictionType || "";
-            kind.value = row.dataset.componentType || "";
-            name.value = row.dataset.componentName || "";
-            apply();
+        const renderMetrics = (rows) => {{
+          const total = rows.length;
+          const first = rows.filter((row) => row.dataset.isFirst === "1").length;
+          const top3 = rows.filter((row) => row.dataset.isTop3 === "1").length;
+          const exact = rows.filter((row) => row.dataset.hitExact === "1").length;
+          const stake = rows.reduce((sum, row) => sum + number(row.dataset.stake), 0);
+          const returned = rows.reduce((sum, row) => sum + number(row.dataset.return), 0);
+          document.getElementById("component-metric-count").textContent = total.toLocaleString();
+          document.getElementById("component-metric-first").textContent = total ? pct(first * 100 / total) : "-";
+          document.getElementById("component-metric-top3").textContent = total ? pct(top3 * 100 / total) : "-";
+          document.getElementById("component-metric-exact").textContent = total ? pct(exact * 100 / total) : "-";
+          document.getElementById("component-metric-roi").textContent = stake ? pct(returned * 100 / stake) : "-";
+        }};
+        const barHtml = (label, value, maxValue, sub = "") => `
+          <div class="analysis-bar-row">
+            <div title="${{label}}">${{label}}</div>
+            <div class="analysis-bar-track"><div class="analysis-bar-fill" style="width:${{Math.min(100, maxValue ? value * 100 / maxValue : 0).toFixed(1)}}%"></div></div>
+            <div>${{sub || pct(value)}}</div>
+          </div>`;
+        const renderTypeBars = (rows) => {{
+          const buckets = new Map();
+          rows.forEach((row) => {{
+            const key = row.dataset.predictionType || "";
+            const item = buckets.get(key) || {{ count: 0, top3: 0 }};
+            item.count += 1;
+            item.top3 += row.dataset.isTop3 === "1" ? 1 : 0;
+            buckets.set(key, item);
           }});
-        }});
-        [date, type, kind, name, confidence, count, verdict].forEach((item) => item.addEventListener("change", apply));
+          const items = Array.from(buckets.entries()).map(([label, item]) => ({{
+            label,
+            value: item.count ? item.top3 * 100 / item.count : 0,
+          }})).sort((a, b) => b.value - a.value);
+          document.getElementById("component-type-bars").innerHTML = items.map((item) => barHtml(item.label, item.value, 100)).join("") || '<div class="empty">データがありません</div>';
+        }};
+        const renderVerdictBars = (groups) => {{
+          const buckets = new Map([["強化候補", 0], ["継続", 0], ["弱化候補", 0], ["要観察", 0]]);
+          groups.forEach((item) => buckets.set(item.verdict, (buckets.get(item.verdict) || 0) + 1));
+          const maxValue = Math.max(...Array.from(buckets.values()), 1);
+          document.getElementById("component-verdict-bars").innerHTML = Array.from(buckets.entries()).map(([label, value]) => barHtml(label, value, maxValue, `${{value}}件`)).join("");
+        }};
+        const rankButton = (item, value) => `
+          <button class="analysis-rank-item" type="button" data-prediction-type="${{item.predictionType}}" data-component-type="${{item.componentType}}" data-component-name="${{item.componentName}}">
+            <div><strong>${{item.componentName}}</strong><span>${{item.predictionType}} / ${{item.componentType}} / 採用${{item.count}}件</span></div>
+            <div>${{value}}</div>
+          </button>`;
+        const bindRankButtons = (root) => {{
+          root.querySelectorAll("button").forEach((button) => {{
+            button.addEventListener("click", () => {{
+              type.value = button.dataset.predictionType || "";
+              kind.value = button.dataset.componentType || "";
+              name.value = button.dataset.componentName || "";
+              apply();
+            }});
+          }});
+        }};
+        const renderRankings = (groups) => {{
+          const roiRoot = document.getElementById("component-roi-ranking");
+          const riskRoot = document.getElementById("component-risk-ranking");
+          const roiItems = groups.filter((item) => item.count >= 10).sort((a, b) => b.roi - a.roi).slice(0, 10);
+          const riskItems = groups.filter((item) => item.count >= 10 && item.top3Rate < 50).sort((a, b) => a.top3Rate - b.top3Rate || b.count - a.count).slice(0, 10);
+          roiRoot.innerHTML = roiItems.map((item) => rankButton(item, pct(item.roi))).join("") || '<div class="empty">データがありません</div>';
+          riskRoot.innerHTML = riskItems.map((item) => rankButton(item, `${{pct(item.top3Rate)}}`)).join("") || '<div class="empty">データがありません</div>';
+          bindRankButtons(roiRoot);
+          bindRankButtons(riskRoot);
+        }};
+        const renderScatter = (groups) => {{
+          const root = document.getElementById("component-scatter");
+          const maxCount = Math.max(...groups.map((item) => item.count), 1);
+          const maxRoi = Math.max(...groups.map((item) => item.roi), 100);
+          root.innerHTML = groups.map((item) => {{
+            const left = Math.max(4, Math.min(96, item.count * 92 / maxCount + 4));
+            const bottom = Math.max(4, Math.min(96, item.top3Rate));
+            const size = Math.max(9, Math.min(28, 9 + item.roi * 19 / maxRoi));
+            return `<button class="analysis-point ${{verdictClass(item.verdict)}}" type="button"
+              title="${{item.predictionType}} / ${{item.componentName}} / 採用${{item.count}}件 / 3着内${{pct(item.top3Rate)}} / 回収${{pct(item.roi)}}"
+              data-prediction-type="${{item.predictionType}}" data-component-type="${{item.componentType}}" data-component-name="${{item.componentName}}"
+              style="left:${{left.toFixed(1)}}%; bottom:${{bottom.toFixed(1)}}%; width:${{size.toFixed(1)}}px; height:${{size.toFixed(1)}}px;">${{item.componentName}}</button>`;
+          }}).join("");
+          bindRankButtons(root);
+        }};
+        const renderSummary = (groups) => {{
+          const rows = groups.sort((a, b) => b.count - a.count || b.top3Rate - a.top3Rate).slice(0, 80);
+          summaryBody.innerHTML = rows.map((item) => `
+            <tr data-prediction-type="${{item.predictionType}}" data-component-type="${{item.componentType}}" data-component-name="${{item.componentName}}">
+              <td>${{item.predictionType}}</td><td>${{item.componentType}}</td><td>${{item.componentName}}</td><td>${{item.count}}</td>
+              <td>${{pct(item.firstRate)}}</td><td>${{pct(item.top3Rate)}}</td><td>${{pct(item.exactRate)}}</td>
+              <td>${{item.avgValue.toFixed(1)}}</td><td>${{item.avgFinal.toFixed(1)}}</td><td>${{pct(item.roi)}}</td><td><span class="pill">${{item.verdict}}</span></td>
+            </tr>`).join("") || '<tr><td colspan="11">データがありません</td></tr>';
+          summaryBody.querySelectorAll("tr").forEach((row) => {{
+            row.addEventListener("click", () => {{
+              type.value = row.dataset.predictionType || "";
+              kind.value = row.dataset.componentType || "";
+              name.value = row.dataset.componentName || "";
+              apply();
+            }});
+          }});
+        }};
+        const apply = () => {{
+          const filteredDetails = detailRows.filter(rowMatches);
+          const groups = aggregate(filteredDetails);
+          renderMetrics(filteredDetails);
+          renderTypeBars(filteredDetails);
+          renderVerdictBars(groups);
+          renderRankings(groups);
+          renderScatter(groups);
+          renderSummary(groups);
+          let shown = 0;
+          detailRows.forEach((row) => {{
+            const visible = rowMatches(row) && shown < 200;
+            row.hidden = !visible;
+            if (visible) shown += 1;
+          }});
+        }};
+        [date, type, kind, name, confidence, count, verdict].forEach((item) => item.addEventListener("input", apply));
+        apply();
       }})();
       </script>
     """
@@ -3172,18 +3507,12 @@ def render_prediction_results(conn) -> str:
     body += "</div>"
 
     if is_dev_environment():
-        result_analysis_rows = prediction_score_result_analysis_rows(result_rows)[:PREDICTION_ANALYSIS_ROW_LIMIT]
         component_detail_rows = component_result_analysis_rows(result_rows)
         component_summary_rows = component_result_summary_rows(component_detail_rows)[:COMPONENT_ANALYSIS_ROW_LIMIT]
-        body += section("予想補正値 結果分析", table(
-            ["対象日", "予想タイプ", "レース", "信頼度", "買い目順", "車番", "選手", "基礎点", "タイプ補正", "最終点", "タイプ補正内訳", "実着順", "1着", "3着内", "判定", "回収額", "モデル"],
-            result_analysis_rows,
-            ["race_date", "prediction_type", "race", "confidence", "pick_order", "car_no", "racer_name", "base_score", "type_adjustment", "final_score", "type_components", "actual_rank", "is_first", "is_top3", "judgment", "return_amount", "model_version"],
-        ), "dev環境のみ表示します。補正で選ばれた車番が実際に1着・3着内へ入ったかを確認するための表です。")
         body += section(
             "補正項目別 成績分析",
             render_component_result_analysis(component_summary_rows, component_detail_rows),
-            "dev環境のみ表示します。補正ごとの傾向を一覧で見て、気になる補正をクリックすると採用明細を絞り込めます。",
+            "dev環境のみ表示します。フィルタに合わせて指標、グラフ、ランキング、補正項目マップが変化します。",
         )
 
     details = []
