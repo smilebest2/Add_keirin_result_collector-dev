@@ -3288,7 +3288,7 @@ def render_prediction_results(conn) -> str:
         FROM race_prediction p
         JOIN race_prediction_result r ON r.prediction_id = p.id
     """)
-    result_rows = rows(conn, """
+    all_result_rows = rows(conn, """
         SELECT p.*, r.actual_1st, r.actual_2nd, r.actual_3rd,
                r.hit_exact, r.hit_1st, r.hit_top2, r.hit_top3_count,
                r.payout, r.stake_amount AS result_stake_amount,
@@ -3307,9 +3307,13 @@ def render_prediction_results(conn) -> str:
         JOIN race_prediction_result r ON r.prediction_id = p.id
         LEFT JOIN race_schedule s ON s.race_id = p.race_id
         LEFT JOIN race_master m ON m.race_id = p.race_id
-        WHERE p.race_date = COALESCE(?, p.race_date)
-        ORDER BY COALESCE(s.venue, m.venue), COALESCE(s.race_no, m.race_no), p.prediction_type
-    """, (latest_result_date,))
+        ORDER BY p.race_date DESC, COALESCE(s.venue, m.venue),
+                 COALESCE(s.race_no, m.race_no), p.prediction_type
+    """)
+    result_rows = [
+        row for row in all_result_rows
+        if row.get("race_date") == latest_result_date
+    ]
     daily_rows = rows(conn, """
         SELECT p.prediction_type,
                COUNT(*) AS predictions,
@@ -3540,13 +3544,24 @@ def render_prediction_results(conn) -> str:
         ["prediction_type", "race", "start_time", "predicted", "actual", "judgment", "hit_1st", "hit_top3_count", "return_amount", "roi"],
     ), "予想ページの注目予想と同じ条件で、各タイプ3件まで答え合わせします。")
 
-    venues = sorted({row.get("venue") for row in result_rows if row.get("venue")})
+    result_dates = sorted(
+        {row.get("race_date") for row in all_result_rows if row.get("race_date")},
+        reverse=True,
+    )
+    date_options = "".join(
+        f'<option value="{h(item)}"{" selected" if item == latest_result_date else ""}>{h(item)}</option>'
+        for item in result_dates
+    )
+    venues = sorted({row.get("venue") for row in all_result_rows if row.get("venue")})
     venue_options = "".join(f'<option value="{h(venue)}">{h(venue)}</option>' for venue in venues)
     grouped: dict[str, dict] = {}
-    for row in result_rows:
+    for row in all_result_rows:
         race_id = row.get("race_id") or ""
-        group = grouped.setdefault(race_id, {
+        race_date = row.get("race_date") or ""
+        group_key = f"{race_date}:{race_id}"
+        group = grouped.setdefault(group_key, {
             "race_id": race_id,
+            "race_date": race_date,
             "venue": row.get("venue") or "",
             "race_no": row.get("race_no") or "",
             "start_time": row.get("start_time") or "",
@@ -3558,7 +3573,11 @@ def render_prediction_results(conn) -> str:
 
     all_rows = []
     duplicate_groups = {"あり": [], "なし": []}
-    for group in sorted(grouped.values(), key=lambda item: (item["venue"], int(item["race_no"] or 0))):
+    for group in sorted(
+        grouped.values(),
+        key=lambda item: (item["race_date"], item["venue"], int(item["race_no"] or 0)),
+        reverse=True,
+    ):
         predictions = group["predictions"]
         combos = [prediction_combo(item) for item in predictions.values()]
         duplicate = len(combos) != len(set(combos))
@@ -3566,14 +3585,17 @@ def render_prediction_results(conn) -> str:
         types = " ".join(predictions.keys())
         judgments = " ".join(sorted({prediction_result_label(item) for item in predictions.values()}))
         has_return = any(int(item.get("return_amount") or 0) > 0 for item in predictions.values())
-        duplicate_groups["あり" if duplicate else "なし"].extend(predictions.values())
+        if group["race_date"] == latest_result_date:
+            duplicate_groups["あり" if duplicate else "なし"].extend(predictions.values())
         cells = {
+            "race_date": group["race_date"],
             "race": f'{group["venue"]} {group["race_no"]}R',
             "start_time": group["start_time"],
             "actual": group["actual"],
             "lineup_text": group["lineup_text"],
             "duplicate": "あり" if duplicate else "なし",
             "_data": {
+                "date": group["race_date"],
                 "venue": group["venue"],
                 "confidence": confidences,
                 "type": types,
@@ -3588,6 +3610,7 @@ def render_prediction_results(conn) -> str:
 
     body += section("当日全レース予想 結果", f"""
       <div class="filters" id="prediction-result-filters">
+        <label>日付<select id="result-filter-date">{date_options}</select></label>
         <label>会場<select id="result-filter-venue"><option value="">すべて</option>{venue_options}</select></label>
         <label>信頼度<select id="result-filter-confidence"><option value="">すべて</option><option value="A">A</option><option value="B">B</option><option value="C">C</option></select></label>
         <label>予想タイプ<select id="result-filter-type"><option value="">すべて</option>{''.join(f'<option value="{h(item)}">{h(item)}</option>' for item in PREDICTION_TYPE_ORDER)}</select></label>
@@ -3596,14 +3619,15 @@ def render_prediction_results(conn) -> str:
         <label>回収<select id="result-filter-return"><option value="">すべて</option><option value="yes">あり</option><option value="no">なし</option></select></label>
       </div>
       {rich_table(
-          ["レース", "発走", "結果", "並び", *PREDICTION_TYPE_ORDER, "重複"],
+          ["日付", "レース", "発走", "結果", "並び", *PREDICTION_TYPE_ORDER, "重複"],
           all_rows,
-          ["race", "start_time", "actual", "lineup_text", *PREDICTION_TYPE_ORDER, "duplicate"],
+          ["race_date", "race", "start_time", "actual", "lineup_text", *PREDICTION_TYPE_ORDER, "duplicate"],
       ).replace("<table>", '<table id="all-race-prediction-results">', 1)}
       <script>
       (() => {{
         const table = document.getElementById("all-race-prediction-results");
         if (!table) return;
+        const date = document.getElementById("result-filter-date");
         const venue = document.getElementById("result-filter-venue");
         const confidence = document.getElementById("result-filter-confidence");
         const type = document.getElementById("result-filter-type");
@@ -3614,6 +3638,7 @@ def render_prediction_results(conn) -> str:
         const apply = () => {{
           rows.forEach((row) => {{
             const show =
+              (!date.value || row.dataset.date === date.value) &&
               (!venue.value || row.dataset.venue === venue.value) &&
               (!confidence.value || (row.dataset.confidence || "").includes(confidence.value)) &&
               (!type.value || (row.dataset.type || "").includes(type.value)) &&
@@ -3623,10 +3648,11 @@ def render_prediction_results(conn) -> str:
             row.hidden = !show;
           }});
         }};
-        [venue, confidence, type, judgment, duplicate, returned].forEach((item) => item.addEventListener("change", apply));
+        [date, venue, confidence, type, judgment, duplicate, returned].forEach((item) => item.addEventListener("change", apply));
+        apply();
       }})();
       </script>
-    """, "会場・R順で、各レースの結果と5タイプの買い目を横並びで比較できます。")
+    """, "日付を切り替え、会場・R順で各レースの結果と5タイプの買い目を横並びで比較できます。")
 
     body += section("日別 予想タイプ別成績", table(
         ["予想タイプ", "予想数", "完全的中", "完全的中率", "1着的中率", "3着内一致平均", "投資額", "払戻額", "回収率"],
