@@ -156,6 +156,33 @@ CREATE TABLE IF NOT EXISTS race_prediction_result (
     FOREIGN KEY (prediction_id) REFERENCES race_prediction(id)
 );
 
+CREATE TABLE IF NOT EXISTS race_prediction_bet (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    prediction_id INTEGER,
+    race_id TEXT,
+    race_date TEXT,
+    prediction_type TEXT,
+    bet_type TEXT,
+    combination TEXT,
+    stake_amount INTEGER DEFAULT 100,
+    created_at TEXT,
+    UNIQUE (prediction_id, bet_type, combination),
+    FOREIGN KEY (prediction_id) REFERENCES race_prediction(id)
+);
+
+CREATE TABLE IF NOT EXISTS race_prediction_bet_result (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    prediction_bet_id INTEGER UNIQUE,
+    race_id TEXT,
+    hit INTEGER,
+    payout INTEGER,
+    stake_amount INTEGER,
+    return_amount INTEGER,
+    roi REAL,
+    checked_at TEXT,
+    FOREIGN KEY (prediction_bet_id) REFERENCES race_prediction_bet(id)
+);
+
 CREATE TABLE IF NOT EXISTS race_line_features (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     race_id TEXT,
@@ -281,8 +308,20 @@ def init_db(conn: sqlite3.Connection) -> None:
         "score_detail_text": "TEXT",
         "score_detail_json": "TEXT",
         "model_version": "TEXT",
+        "sample_kind": "TEXT DEFAULT 'live'",
     }.items():
         ensure_column(conn, "race_prediction", column, column_type)
+    conn.execute(
+        """
+        UPDATE race_prediction
+        SET sample_kind = 'reference'
+        WHERE DATE(created_at) > race_date
+          AND COALESCE(sample_kind, 'live') = 'live'
+        """
+    )
+    conn.execute(
+        "UPDATE race_prediction SET sample_kind = 'live' WHERE sample_kind IS NULL OR sample_kind = ''"
+    )
     conn.commit()
 
 

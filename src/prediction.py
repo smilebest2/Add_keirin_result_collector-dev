@@ -10,6 +10,7 @@ JST = timezone(timedelta(hours=9))
 TRIFECTA = "3連単"
 STAKE_AMOUNT = 100
 MODEL_VERSION = "explainable-v1"
+BET_TYPES = ["2車複", "2車単", "ワイド", "3連複", "3連単"]
 
 PREDICTION_TYPES = [
     "本命予想",
@@ -50,7 +51,7 @@ def scalar(conn, sql: str, params=()):
     return row[0]
 
 
-def racer_history(conn, entry: dict, venue: str | None) -> dict:
+def racer_history(conn, entry: dict, venue: str | None, target_date: str) -> dict:
     if entry.get("prefecture") and entry.get("term"):
         where = "r.racer_name = ? AND r.prefecture = ? AND r.term = ?"
         params = [entry["racer_name"], entry["prefecture"], entry["term"]]
@@ -79,9 +80,10 @@ def racer_history(conn, entry: dict, venue: str | None) -> dict:
                AVG(CASE WHEN r.rank <= 2 THEN 1.0 ELSE 0 END) * 100 AS top2_rate,
                AVG(CASE WHEN r.rank <= 3 THEN 1.0 ELSE 0 END) * 100 AS top3_rate
         FROM race_result r
-        WHERE {where}
+        JOIN race_master m ON m.race_id = r.race_id
+        WHERE {where} AND m.race_date < ?
         """,
-        params,
+        [*params, target_date],
     ).fetchone()
     venue_stats = conn.execute(
         f"""
@@ -89,29 +91,33 @@ def racer_history(conn, entry: dict, venue: str | None) -> dict:
                AVG(CASE WHEN r.rank <= 3 THEN 1.0 ELSE 0 END) * 100 AS top3_rate
         FROM race_result r
         JOIN race_master m ON m.race_id = r.race_id
-        WHERE {where} AND m.venue = ?
+        WHERE {where} AND m.venue = ? AND m.race_date < ?
         """,
-        [*params, venue],
+        [*params, venue, target_date],
     ).fetchone()
     upset_score = scalar(
         conn,
         f"""
         SELECT COALESCE(AVG(p.popularity - r.rank), 0)
         FROM race_result r
+        JOIN race_master m ON m.race_id = r.race_id
         JOIN payout p ON p.race_id = r.race_id AND p.bet_type = ?
         WHERE {where} AND p.popularity IS NOT NULL AND r.rank <= 3
+          AND m.race_date < ?
         """,
-        [TRIFECTA, *params],
+        [TRIFECTA, *params, target_date],
     ) or 0
     fade_score = scalar(
         conn,
         f"""
         SELECT COALESCE(AVG(r.rank - p.popularity), 0)
         FROM race_result r
+        JOIN race_master m ON m.race_id = r.race_id
         JOIN payout p ON p.race_id = r.race_id AND p.bet_type = ?
         WHERE {where} AND p.popularity IS NOT NULL
+          AND m.race_date < ?
         """,
-        [TRIFECTA, *params],
+        [TRIFECTA, *params, target_date],
     ) or 0
     return {
         "starts": all_stats["starts"] or 0,
@@ -136,9 +142,9 @@ def car_context(conn, race: dict, car_no: int, target_date: str) -> dict:
         SELECT AVG(CASE WHEN r.rank = 1 THEN 1.0 ELSE 0 END) * 100
         FROM race_result r
         JOIN race_master m ON m.race_id = r.race_id
-        WHERE m.venue = ? AND r.car_no = ?
+        WHERE m.venue = ? AND r.car_no = ? AND m.race_date < ?
         """,
-        (venue, car_no),
+        (venue, car_no, target_date),
     )
     same_venue_yesterday = scalar(
         conn,
@@ -188,7 +194,7 @@ def entry_scores(conn, race: dict, target_date: str) -> list[dict]:
     )
     scored = []
     for entry in entries:
-        history = racer_history(conn, entry, race.get("venue"))
+        history = racer_history(conn, entry, race.get("venue"), target_date)
         context = car_context(conn, race, entry["car_no"], target_date)
         line_pos = lineup_position(conn, race["race_id"], entry["car_no"])
         line_bonus = 4 if line_pos == 1 else 2 if line_pos == 2 else 0
@@ -380,6 +386,66 @@ def confidence(score_value: float, has_same_venue_yesterday: bool) -> str:
     return "C"
 
 
+def bet_combinations(predicted: list[int]) -> dict[str, list[str]]:
+    first, second, third = predicted
+    top2 = "=".join(str(item) for item in sorted([first, second]))
+    top3 = "=".join(str(item) for item in sorted([first, second, third]))
+    wide = [
+        "=".join(str(item) for item in sorted(pair))
+        for pair in [(first, second), (first, third), (second, third)]
+    ]
+    return {
+        "2車複": [top2],
+        "2車単": [f"{first}-{second}"],
+        "ワイド": wide,
+        "3連複": [top3],
+        "3連単": [f"{first}-{second}-{third}"],
+    }
+
+
+def ensure_prediction_bets(conn) -> int:
+    saved = 0
+    predictions = rows(
+        conn,
+        """
+        SELECT id, race_id, race_date, prediction_type,
+               predicted_1st, predicted_2nd, predicted_3rd, created_at
+        FROM race_prediction
+        """,
+    )
+    for prediction in predictions:
+        predicted = [
+            int(prediction["predicted_1st"]),
+            int(prediction["predicted_2nd"]),
+            int(prediction["predicted_3rd"]),
+        ]
+        for bet_type, combinations in bet_combinations(predicted).items():
+            for combination in combinations:
+                cursor = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO race_prediction_bet
+                        (
+                            prediction_id, race_id, race_date, prediction_type,
+                            bet_type, combination, stake_amount, created_at
+                        )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        prediction["id"],
+                        prediction["race_id"],
+                        prediction["race_date"],
+                        prediction["prediction_type"],
+                        bet_type,
+                        combination,
+                        STAKE_AMOUNT,
+                        prediction["created_at"],
+                    ),
+                )
+                saved += max(cursor.rowcount, 0)
+    conn.commit()
+    return saved
+
+
 def clear_date_predictions(conn, target_date: str) -> None:
     prediction_ids = [
         row["id"]
@@ -389,6 +455,23 @@ def clear_date_predictions(conn, target_date: str) -> None:
         ).fetchall()
     ]
     if prediction_ids:
+        bet_ids = [
+            row["id"]
+            for row in conn.execute(
+                f"""
+                SELECT id
+                FROM race_prediction_bet
+                WHERE prediction_id IN ({','.join('?' for _ in prediction_ids)})
+                """,
+                prediction_ids,
+            ).fetchall()
+        ]
+        if bet_ids:
+            conn.executemany(
+                "DELETE FROM race_prediction_bet_result WHERE prediction_bet_id = ?",
+                [(item,) for item in bet_ids],
+            )
+        conn.executemany("DELETE FROM race_prediction_bet WHERE prediction_id = ?", [(item,) for item in prediction_ids])
         conn.executemany("DELETE FROM race_prediction_result WHERE prediction_id = ?", [(item,) for item in prediction_ids])
     conn.execute("DELETE FROM race_prediction WHERE race_date = ?", (target_date,))
 
@@ -407,8 +490,12 @@ def clear_analysis_details_if_needed(conn) -> None:
     )
 
 
-def generate_predictions(conn, target_date: str) -> int:
+def generate_predictions(conn, target_date: str, replace: bool = False) -> int:
     include_analysis_detail = is_dev_environment()
+    existing = scalar(conn, "SELECT COUNT(*) FROM race_prediction WHERE race_date = ?", (target_date,)) or 0
+    if existing and not replace:
+        ensure_prediction_bets(conn)
+        return 0
     races = rows(
         conn,
         """
@@ -419,7 +506,9 @@ def generate_predictions(conn, target_date: str) -> int:
         """,
         (target_date,),
     )
-    clear_date_predictions(conn, target_date)
+    if replace:
+        clear_date_predictions(conn, target_date)
+    sample_kind = "backtest" if target_date < default_target_date() else "live"
     saved = 0
     for prediction_type in PREDICTION_TYPES:
         candidates = []
@@ -449,9 +538,9 @@ def generate_predictions(conn, target_date: str) -> int:
                         race_id, race_date, prediction_type, predicted_1st,
                         predicted_2nd, predicted_3rd, confidence, score,
                         reason_text, score_detail_text, score_detail_json, model_version,
-                        stake_amount, created_at
+                        stake_amount, sample_kind, created_at
                     )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     race["race_id"],
@@ -467,11 +556,13 @@ def generate_predictions(conn, target_date: str) -> int:
                     candidate["detail_json"],
                     MODEL_VERSION,
                     STAKE_AMOUNT,
+                    sample_kind,
                     datetime.now().isoformat(timespec="seconds"),
                 ),
             )
             saved += 1
     conn.commit()
+    ensure_prediction_bets(conn)
     return saved
 
 
@@ -564,23 +655,101 @@ def evaluate_predictions(conn) -> int:
     return checked
 
 
-def run(target_date: str | None = None) -> dict:
+def evaluate_prediction_bets(conn) -> int:
+    ensure_prediction_bets(conn)
+    prediction_bets = rows(
+        conn,
+        """
+        SELECT b.*
+        FROM race_prediction_bet b
+        JOIN race_master m ON m.race_id = b.race_id
+        LEFT JOIN race_prediction_bet_result r ON r.prediction_bet_id = b.id
+        WHERE (
+                r.id IS NULL
+                OR r.payout IS NULL
+              )
+          AND EXISTS (
+                SELECT 1
+                FROM race_result rr
+                WHERE rr.race_id = b.race_id AND rr.rank IN (1, 2, 3)
+              )
+          AND EXISTS (
+                SELECT 1
+                FROM payout pay
+                WHERE pay.race_id = b.race_id AND pay.bet_type = b.bet_type
+              )
+        """,
+    )
+    checked = 0
+    for bet in prediction_bets:
+        payout = scalar(
+            conn,
+            """
+            SELECT payout
+            FROM payout
+            WHERE race_id = ? AND bet_type = ? AND combination = ?
+            LIMIT 1
+            """,
+            (bet["race_id"], bet["bet_type"], bet["combination"]),
+        )
+        hit = payout is not None
+        stake = int(bet["stake_amount"] or STAKE_AMOUNT)
+        return_amount = int(payout or 0) if hit else 0
+        roi = (return_amount / stake * 100) if stake else 0
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO race_prediction_bet_result
+                (
+                    prediction_bet_id, race_id, hit, payout, stake_amount,
+                    return_amount, roi, checked_at
+                )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                bet["id"],
+                bet["race_id"],
+                1 if hit else 0,
+                payout or 0,
+                stake,
+                return_amount,
+                roi,
+                datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
+        checked += 1
+    conn.commit()
+    return checked
+
+
+def run(target_date: str | None = None, replace: bool = False) -> dict:
     target_date = target_date or default_target_date()
     with connect() as conn:
         init_db(conn)
         checked_before = evaluate_predictions(conn)
-        saved = generate_predictions(conn, target_date)
+        bet_checked_before = evaluate_prediction_bets(conn)
+        saved = generate_predictions(conn, target_date, replace=replace)
         checked_after = evaluate_predictions(conn)
+        bet_checked_after = evaluate_prediction_bets(conn)
         clear_analysis_details_if_needed(conn)
         conn.commit()
-    return {"date": target_date, "predictions": saved, "checked": checked_before + checked_after}
+    return {
+        "date": target_date,
+        "predictions": saved,
+        "checked": checked_before + checked_after,
+        "bet_checked": bet_checked_before + bet_checked_after,
+    }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate and evaluate keirin predictions")
     parser.add_argument("--date", help="Target date in YYYY-MM-DD. Default: today")
+    parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="Replace existing predictions for the target date. Historical replacements are marked as backtests.",
+    )
     args = parser.parse_args()
-    result = run(args.date)
+    result = run(args.date, replace=args.replace)
     print(result)
 
 
