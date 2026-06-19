@@ -103,6 +103,7 @@ def racer_history(conn, entry: dict, venue: str | None, target_date: str) -> dic
         JOIN race_master m ON m.race_id = r.race_id
         JOIN payout p ON p.race_id = r.race_id AND p.bet_type = ?
         WHERE {where} AND p.popularity IS NOT NULL AND r.rank <= 3
+          AND COALESCE(m.dead_heat, 0) = 0
           AND m.race_date < ?
         """,
         [TRIFECTA, *params, target_date],
@@ -115,6 +116,7 @@ def racer_history(conn, entry: dict, venue: str | None, target_date: str) -> dic
         JOIN race_master m ON m.race_id = r.race_id
         JOIN payout p ON p.race_id = r.race_id AND p.bet_type = ?
         WHERE {where} AND p.popularity IS NOT NULL
+          AND COALESCE(m.dead_heat, 0) = 0
           AND m.race_date < ?
         """,
         [TRIFECTA, *params, target_date],
@@ -595,15 +597,30 @@ def evaluate_predictions(conn) -> int:
             SELECT rank, car_no
             FROM race_result
             WHERE race_id = ? AND rank IN (1, 2, 3)
-            ORDER BY rank
+            ORDER BY rank, car_no
             """,
             (prediction["race_id"],),
         )
-        if len(actual_rows) < 3:
+        rank_candidates = {
+            rank: [
+                int(row["car_no"])
+                for row in actual_rows
+                if int(row["rank"]) == rank
+            ]
+            for rank in (1, 2, 3)
+        }
+        official_top3 = {
+            int(row["car_no"])
+            for row in actual_rows
+        }
+        if len(official_top3) < 3 or not rank_candidates[1]:
             continue
-        actual = [int(row["car_no"]) for row in actual_rows]
+        actual = [
+            rank_candidates[rank][0] if rank_candidates[rank] else None
+            for rank in (1, 2, 3)
+        ]
         predicted = [int(prediction["predicted_1st"]), int(prediction["predicted_2nd"]), int(prediction["predicted_3rd"])]
-        exact = predicted == actual
+        predicted_combination = "-".join(str(item) for item in predicted)
         payout = scalar(
             conn,
             """
@@ -612,26 +629,25 @@ def evaluate_predictions(conn) -> int:
             WHERE race_id = ? AND bet_type = ? AND combination = ?
             LIMIT 1
             """,
-            (prediction["race_id"], TRIFECTA, "-".join(str(item) for item in actual)),
+            (prediction["race_id"], TRIFECTA, predicted_combination),
         )
-        if payout is None:
-            payout = scalar(
-                conn,
-                "SELECT payout FROM payout WHERE race_id = ? AND bet_type = ? LIMIT 1",
-                (prediction["race_id"], TRIFECTA),
-            )
+        exact = payout is not None
         return_amount = int(payout or 0) if exact else 0
         stake = int(prediction["stake_amount"] or STAKE_AMOUNT)
         roi = (return_amount / stake * 100) if stake else 0
+        top2_candidates = set(rank_candidates[1]) | set(rank_candidates[2])
+        dead_heat = any(len(candidates) > 1 for candidates in rank_candidates.values())
         conn.execute(
             """
             INSERT OR REPLACE INTO race_prediction_result
                 (
                     prediction_id, race_id, actual_1st, actual_2nd, actual_3rd,
+                    actual_1st_candidates, actual_2nd_candidates,
+                    actual_3rd_candidates, dead_heat,
                     hit_exact, hit_1st, hit_top2, hit_top3_count, payout,
                     stake_amount, return_amount, roi, checked_at
                 )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 prediction["id"],
@@ -639,10 +655,14 @@ def evaluate_predictions(conn) -> int:
                 actual[0],
                 actual[1],
                 actual[2],
+                ",".join(str(item) for item in rank_candidates[1]),
+                ",".join(str(item) for item in rank_candidates[2]),
+                ",".join(str(item) for item in rank_candidates[3]),
+                1 if dead_heat else 0,
                 1 if exact else 0,
-                1 if predicted[0] == actual[0] else 0,
-                1 if set(predicted[:2]) == set(actual[:2]) else 0,
-                len(set(predicted) & set(actual)),
+                1 if predicted[0] in rank_candidates[1] else 0,
+                1 if set(predicted[:2]).issubset(top2_candidates) else 0,
+                len(set(predicted) & official_top3),
                 payout,
                 stake,
                 return_amount,

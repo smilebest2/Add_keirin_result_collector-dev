@@ -184,6 +184,7 @@ def page(title: str, active: str, body: str) -> str:
         ("index.html", "TOP", "top"),
         ("venues.html", "会場分析", "venues"),
         ("car_numbers.html", "車番分析", "cars"),
+        ("outcomes.html", "出目分析", "outcomes"),
         ("payouts.html", "配当分析", "payouts"),
         ("racers.html", "選手分析", "racers"),
         ("races.html", "レース一覧", "races"),
@@ -1170,6 +1171,275 @@ def render_car_numbers(conn) -> str:
         ["car_no", "races", "return_total", "investment", "recovery_rate", "sample_note"],
     ), "回収率は的中頻度ではなく払戻の大きさに強く影響されます。母数不足の車番は薄く表示しています。")
     return page("車番分析", "cars", body)
+
+
+def render_outcomes(conn) -> str:
+    bet_placeholders = ",".join("?" for _ in PREDICTION_BET_TYPES)
+    eligible_races = scalar(
+        conn,
+        "SELECT COUNT(*) FROM race_master WHERE COALESCE(dead_heat, 0) = 0",
+    )
+    dead_heat_races = scalar(
+        conn,
+        "SELECT COUNT(*) FROM race_master WHERE COALESCE(dead_heat, 0) = 1",
+    )
+    date_range = conn.execute(
+        """
+        SELECT MIN(race_date) AS first_date, MAX(race_date) AS last_date
+        FROM race_master
+        WHERE COALESCE(dead_heat, 0) = 0
+        """
+    ).fetchone()
+
+    bet_summary = rows(
+        conn,
+        f"""
+        SELECT p.bet_type,
+               COUNT(*) AS winning_rows,
+               COUNT(DISTINCT p.race_id) AS races,
+               COUNT(DISTINCT p.combination) AS combinations
+        FROM payout p
+        JOIN race_master m ON m.race_id = p.race_id
+        WHERE COALESCE(m.dead_heat, 0) = 0
+          AND p.bet_type IN ({bet_placeholders})
+        GROUP BY p.bet_type
+        """,
+        PREDICTION_BET_TYPES,
+    )
+    summary_by_type = {row["bet_type"]: row for row in bet_summary}
+    bet_summary = [
+        {
+            "bet_type": bet_type,
+            "races": number(summary_by_type.get(bet_type, {}).get("races") or 0),
+            "winning_rows": number(summary_by_type.get(bet_type, {}).get("winning_rows") or 0),
+            "combinations": number(summary_by_type.get(bet_type, {}).get("combinations") or 0),
+        }
+        for bet_type in PREDICTION_BET_TYPES
+    ]
+
+    outcome_rows = rows(
+        conn,
+        f"""
+        WITH totals AS (
+            SELECT p.bet_type,
+                   COUNT(DISTINCT p.race_id) AS race_total
+            FROM payout p
+            JOIN race_master m ON m.race_id = p.race_id
+            WHERE COALESCE(m.dead_heat, 0) = 0
+              AND p.bet_type IN ({bet_placeholders})
+            GROUP BY p.bet_type
+        )
+        SELECT p.bet_type, p.combination,
+               COUNT(*) AS appearances,
+               ROUND(COUNT(*) * 100.0 / NULLIF(t.race_total, 0), 2) AS appearance_rate,
+               ROUND(AVG(p.payout), 0) AS avg_payout,
+               MIN(p.payout) AS min_payout,
+               MAX(p.payout) AS max_payout,
+               ROUND(AVG(p.popularity), 1) AS avg_popularity,
+               MIN(m.race_date) AS first_date,
+               MAX(m.race_date) AS last_date
+        FROM payout p
+        JOIN race_master m ON m.race_id = p.race_id
+        JOIN totals t ON t.bet_type = p.bet_type
+        WHERE COALESCE(m.dead_heat, 0) = 0
+          AND p.bet_type IN ({bet_placeholders})
+        GROUP BY p.bet_type, p.combination
+        ORDER BY
+          CASE p.bet_type
+            WHEN '2車複' THEN 1 WHEN '2車単' THEN 2 WHEN 'ワイド' THEN 3
+            WHEN '3連複' THEN 4 WHEN '3連単' THEN 5 ELSE 9
+          END,
+          appearances DESC, avg_payout DESC, p.combination
+        """,
+        (*PREDICTION_BET_TYPES, *PREDICTION_BET_TYPES),
+    )
+    rank_by_type = defaultdict(int)
+    for row in outcome_rows:
+        rank_by_type[row["bet_type"]] += 1
+        row["rank"] = rank_by_type[row["bet_type"]]
+        row["appearance_rate_display"] = pct(row["appearance_rate"])
+        row["avg_payout_display"] = yen(row["avg_payout"])
+        row["min_payout_display"] = yen(row["min_payout"])
+        row["max_payout_display"] = yen(row["max_payout"])
+        row["avg_popularity_display"] = decimal(row["avg_popularity"], 1)
+        row["_data"] = {
+            "bet-type": row["bet_type"],
+            "combination": row["combination"],
+        }
+
+    trifecta_top = [
+        row for row in outcome_rows
+        if row["bet_type"] == TRIFECTA
+    ][:20]
+
+    venue_leaders = rows(
+        conn,
+        f"""
+        WITH grouped AS (
+            SELECT m.venue, p.bet_type, p.combination,
+                   COUNT(*) AS appearances,
+                   ROUND(AVG(p.payout), 0) AS avg_payout
+            FROM payout p
+            JOIN race_master m ON m.race_id = p.race_id
+            WHERE COALESCE(m.dead_heat, 0) = 0
+              AND p.bet_type IN ({bet_placeholders})
+            GROUP BY m.venue, p.bet_type, p.combination
+        ),
+        ranked AS (
+            SELECT *,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY venue, bet_type
+                       ORDER BY appearances DESC, avg_payout DESC, combination
+                   ) AS outcome_rank
+            FROM grouped
+        )
+        SELECT venue, bet_type, combination, appearances, avg_payout
+        FROM ranked
+        WHERE outcome_rank = 1
+        ORDER BY venue,
+          CASE bet_type
+            WHEN '2車複' THEN 1 WHEN '2車単' THEN 2 WHEN 'ワイド' THEN 3
+            WHEN '3連複' THEN 4 WHEN '3連単' THEN 5 ELSE 9
+          END
+        """,
+        PREDICTION_BET_TYPES,
+    )
+    for row in venue_leaders:
+        row["avg_payout_display"] = yen(row["avg_payout"])
+        row["_data"] = {"bet-type": row["bet_type"]}
+
+    race_no_leaders = rows(
+        conn,
+        f"""
+        WITH grouped AS (
+            SELECT m.race_no, p.bet_type, p.combination,
+                   COUNT(*) AS appearances,
+                   ROUND(AVG(p.payout), 0) AS avg_payout
+            FROM payout p
+            JOIN race_master m ON m.race_id = p.race_id
+            WHERE COALESCE(m.dead_heat, 0) = 0
+              AND p.bet_type IN ({bet_placeholders})
+            GROUP BY m.race_no, p.bet_type, p.combination
+        ),
+        ranked AS (
+            SELECT *,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY race_no, bet_type
+                       ORDER BY appearances DESC, avg_payout DESC, combination
+                   ) AS outcome_rank
+            FROM grouped
+        )
+        SELECT race_no, bet_type, combination, appearances, avg_payout
+        FROM ranked
+        WHERE outcome_rank = 1
+        ORDER BY race_no,
+          CASE bet_type
+            WHEN '2車複' THEN 1 WHEN '2車単' THEN 2 WHEN 'ワイド' THEN 3
+            WHEN '3連複' THEN 4 WHEN '3連単' THEN 5 ELSE 9
+          END
+        """,
+        PREDICTION_BET_TYPES,
+    )
+    for row in race_no_leaders:
+        row["race_no_display"] = f'{row["race_no"]}R'
+        row["avg_payout_display"] = yen(row["avg_payout"])
+        row["_data"] = {"bet-type": row["bet_type"]}
+
+    bet_options = "".join(
+        f'<option value="{h(bet_type)}"{" selected" if bet_type == TRIFECTA else ""}>{h(bet_type)}</option>'
+        for bet_type in PREDICTION_BET_TYPES
+    )
+    body = f"""
+    <div class="grid">
+      <div class="card"><span>通常レース</span><strong>{h(number(eligible_races))}</strong></div>
+      <div class="card"><span>集計開始</span><strong>{h(date_range["first_date"] or "-")}</strong></div>
+      <div class="card"><span>集計終了</span><strong>{h(date_range["last_date"] or "-")}</strong></div>
+      <div class="card"><span>同着除外</span><strong>{h(number(dead_heat_races))}</strong></div>
+    </div>
+    """
+    body += section(
+        "賭式別データ量",
+        table(
+            ["賭式", "対象レース", "的中組番行", "確認できる出目数"],
+            bet_summary,
+            ["bet_type", "races", "winning_rows", "combinations"],
+        ),
+        "ワイドは1レースにつき複数の的中組番があるため、的中組番行は対象レース数より多くなります。",
+    )
+    body += section(
+        "3連単 出目ランキング TOP20",
+        bar_chart(trifecta_top, "combination", "appearances", lambda value: f"{int(value)}回", 20),
+        "同着を除いた通常レースで、出現回数の多い順です。",
+    )
+    body += section(
+        "出目ランキング",
+        f"""
+        <div class="filters">
+          <label>賭式
+            <select id="outcome-bet-filter">{bet_options}</select>
+          </label>
+          <label>組番検索
+            <input id="outcome-combination-filter" type="search" placeholder="例: 1-2-3">
+          </label>
+        </div>
+        {table(
+            ["順位", "賭式", "組番", "出現", "レース出現率", "平均配当", "最低", "最高", "平均人気", "初回", "最終"],
+            outcome_rows,
+            ["rank", "bet_type", "combination", "appearances", "appearance_rate_display",
+             "avg_payout_display", "min_payout_display", "max_payout_display",
+             "avg_popularity_display", "first_date", "last_date"],
+        ).replace("<table>", '<table id="outcome-ranking-table">', 1)}
+        """,
+        "レース出現率は、その賭式が発売された通常レースのうち該当組番が出た割合です。",
+    )
+    body += '<div class="grid two">'
+    body += section(
+        "会場別 最多出目",
+        table(
+            ["会場", "賭式", "最多組番", "出現", "平均配当"],
+            venue_leaders,
+            ["venue", "bet_type", "combination", "appearances", "avg_payout_display"],
+        ).replace("<table>", '<table id="outcome-venue-table">', 1),
+    )
+    body += section(
+        "レース番号別 最多出目",
+        table(
+            ["R", "賭式", "最多組番", "出現", "平均配当"],
+            race_no_leaders,
+            ["race_no_display", "bet_type", "combination", "appearances", "avg_payout_display"],
+        ).replace("<table>", '<table id="outcome-race-no-table">', 1),
+    )
+    body += "</div>"
+    body += """
+    <script>
+    (() => {
+      const bet = document.getElementById("outcome-bet-filter");
+      const combination = document.getElementById("outcome-combination-filter");
+      const tables = [
+        document.getElementById("outcome-ranking-table"),
+        document.getElementById("outcome-venue-table"),
+        document.getElementById("outcome-race-no-table")
+      ].filter(Boolean);
+      const apply = () => {
+        const selectedBet = bet.value;
+        const query = combination.value.trim();
+        tables.forEach((table) => {
+          table.querySelectorAll("tbody tr").forEach((row) => {
+            const betMatch = !selectedBet || row.dataset.betType === selectedBet;
+            const combinationMatch = table.id !== "outcome-ranking-table"
+              || !query
+              || (row.dataset.combination || "").includes(query);
+            row.hidden = !(betMatch && combinationMatch);
+          });
+        });
+      };
+      bet.addEventListener("change", apply);
+      combination.addEventListener("input", apply);
+      apply();
+    })();
+    </script>
+    """
+    return page("出目分析", "outcomes", body)
 
 
 def render_payouts(conn) -> str:
@@ -2329,6 +2599,12 @@ def render_race_detail(conn, race_id: str) -> str:
         WHERE race_id = ?
         ORDER BY rank IS NULL, rank, car_no
     """, (race_id,))
+    rank_counts = defaultdict(int)
+    for row in result_rows:
+        rank_counts[row.get("rank")] += 1
+    for row in result_rows:
+        rank = row.get("rank")
+        row["rank_display"] = f"{rank}（同着）" if rank is not None and rank_counts[rank] > 1 else rank
     payout_rows = rows(conn, """
         SELECT bet_type, combination, payout, popularity
         FROM payout
@@ -2374,7 +2650,7 @@ def render_race_detail(conn, race_id: str) -> str:
     body += section("着順", table(
         ["着順", "車番", "選手", "級班", "府県", "年齢", "期", "着差", "上り", "決まり手", "S", "B"],
         result_rows,
-        ["rank", "car_no", "racer_name", "class", "prefecture", "age", "term", "margin", "time", "kimarite", "start_mark", "back_mark"],
+        ["rank_display", "car_no", "racer_name", "class", "prefecture", "age", "term", "margin", "time", "kimarite", "start_mark", "back_mark"],
     ))
     body += section("払戻", table(
         ["賭式", "組番", "払戻", "人気"],
@@ -2410,15 +2686,22 @@ def race_detail_payloads(conn, target_dates: set[str] | None = None) -> dict[str
         compact_date = str(race_id).split("_", 1)[0]
         if target_dates is not None and compact_date not in target_dates:
             continue
+        detail_results = rows(conn, """
+            SELECT rank, car_no, racer_name, class, prefecture, age, term, margin,
+                   time, kimarite, start_mark, back_mark
+            FROM race_result
+            WHERE race_id = ?
+            ORDER BY rank IS NULL, rank, car_no
+        """, (race_id,))
+        rank_counts = defaultdict(int)
+        for row in detail_results:
+            rank_counts[row.get("rank")] += 1
+        for row in detail_results:
+            rank = row.get("rank")
+            row["rank_display"] = f"{rank}（同着）" if rank is not None and rank_counts[rank] > 1 else rank
         payloads[compact_date].append({
             "race": race,
-            "results": rows(conn, """
-                SELECT rank, car_no, racer_name, class, prefecture, age, term, margin,
-                       time, kimarite, start_mark, back_mark
-                FROM race_result
-                WHERE race_id = ?
-                ORDER BY rank IS NULL, rank, car_no
-            """, (race_id,)),
+            "results": detail_results,
             "payouts": rows(conn, """
                 SELECT bet_type, combination, payout, popularity
                 FROM payout
@@ -2508,6 +2791,15 @@ def prediction_pick_cell(row: dict | None) -> str:
 
 
 def actual_combo(row: dict) -> str:
+    candidate_fields = [
+        row.get("actual_1st_candidates"),
+        row.get("actual_2nd_candidates"),
+        row.get("actual_3rd_candidates"),
+    ]
+    if any(candidate_fields):
+        values = [value or "-" for value in candidate_fields]
+        combo = "-".join(value.replace(",", "/") for value in values)
+        return f"{combo}（同着）" if row.get("dead_heat") else combo
     values = [row.get("actual_1st"), row.get("actual_2nd"), row.get("actual_3rd")]
     if any(value is None for value in values):
         return "-"
@@ -3290,6 +3582,8 @@ def render_prediction_results(conn) -> str:
     """)
     all_result_rows = rows(conn, """
         SELECT p.*, r.actual_1st, r.actual_2nd, r.actual_3rd,
+               r.actual_1st_candidates, r.actual_2nd_candidates,
+               r.actual_3rd_candidates, r.dead_heat,
                r.hit_exact, r.hit_1st, r.hit_top2, r.hit_top3_count,
                r.payout, r.stake_amount AS result_stake_amount,
                r.return_amount, r.roi, r.checked_at,
@@ -3737,6 +4031,8 @@ def render_prediction_results(conn) -> str:
 
     historical_rows = rows(conn, """
         SELECT p.*, r.actual_1st, r.actual_2nd, r.actual_3rd,
+               r.actual_1st_candidates, r.actual_2nd_candidates,
+               r.actual_3rd_candidates, r.dead_heat,
                r.hit_exact, r.hit_1st, r.hit_top2, r.hit_top3_count,
                r.payout, r.return_amount, r.roi, r.checked_at,
                COALESCE(s.venue, m.venue) AS venue,
@@ -4212,7 +4508,7 @@ def render_race_detail_shell() -> str:
             <div class="grid">${cards}</div>
             ${section("レース情報", table(["項目", "値"], infoRows, ["name", "value"]))}
             <div class="grid two">
-              ${section("着順", table(["着順", "車番", "選手", "級班", "府県", "年齢", "期", "着差", "上り", "決まり手", "S", "B"], item.results || [], ["rank", "car_no", "racer_name", "class", "prefecture", "age", "term", "margin", "time", "kimarite", "start_mark", "back_mark"]))}
+              ${section("着順", table(["着順", "車番", "選手", "級班", "府県", "年齢", "期", "着差", "上り", "決まり手", "S", "B"], item.results || [], ["rank_display", "car_no", "racer_name", "class", "prefecture", "age", "term", "margin", "time", "kimarite", "start_mark", "back_mark"]))}
               ${section("払戻", table(["賭式", "組番", "払戻", "人気"], payouts, ["bet_type", "combination", "payout_display", "popularity"]))}
             </div>
             ${section("並び詳細", table(["ライン", "位置", "車番"], item.lineup || [], ["line_no", "line_position", "car_no"]))}
@@ -4238,6 +4534,7 @@ def export_all(output_dir: Path = DOCS_DIR, detail_dates: set[str] | None = None
             "index.html": render_top(conn),
             "venues.html": render_venues(conn),
             "car_numbers.html": render_car_numbers(conn),
+            "outcomes.html": render_outcomes(conn),
             "payouts.html": render_payouts(conn),
             "racers.html": render_racers(conn),
             "races.html": render_races(conn),

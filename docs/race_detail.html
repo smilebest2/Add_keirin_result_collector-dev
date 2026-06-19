@@ -641,7 +641,7 @@
   <header>
     <div class="wrap">
       <h1>レース詳細</h1>
-      <nav><a class="" href="index.html">TOP</a><a class="" href="venues.html">会場分析</a><a class="" href="car_numbers.html">車番分析</a><a class="" href="payouts.html">配当分析</a><a class="" href="racers.html">選手分析</a><a class="active" href="races.html">レース一覧</a><a class="" href="predictions.html">予想</a><a class="" href="prediction-results.html">予想結果</a><a class="" href="lineup-features.html">ライン解析</a><a class="" href="quality.html">データ品質</a><a class="" href="custom.html">独自ランキング</a></nav>
+      <nav><a class="" href="index.html">TOP</a><a class="" href="venues.html">会場分析</a><a class="" href="car_numbers.html">車番分析</a><a class="" href="outcomes.html">出目分析</a><a class="" href="payouts.html">配当分析</a><a class="" href="racers.html">選手分析</a><a class="" href="predictions.html">予想</a><a class="" href="prediction-results.html">予想結果</a><a class="" href="lineup-features.html">ライン解析</a><a class="active" href="races.html">レース一覧</a><a class="" href="quality.html">データ品質</a><a class="" href="custom.html">独自ランキング</a></nav>
     </div>
   </header>
   <main>
@@ -726,7 +726,7 @@
             <div class="grid">${cards}</div>
             ${section("レース情報", table(["項目", "値"], infoRows, ["name", "value"]))}
             <div class="grid two">
-              ${section("着順", table(["着順", "車番", "選手", "級班", "府県", "年齢", "期", "着差", "上り", "決まり手", "S", "B"], item.results || [], ["rank", "car_no", "racer_name", "class", "prefecture", "age", "term", "margin", "time", "kimarite", "start_mark", "back_mark"]))}
+              ${section("着順", table(["着順", "車番", "選手", "級班", "府県", "年齢", "期", "着差", "上り", "決まり手", "S", "B"], item.results || [], ["rank_display", "car_no", "racer_name", "class", "prefecture", "age", "term", "margin", "time", "kimarite", "start_mark", "back_mark"]))}
               ${section("払戻", table(["賭式", "組番", "払戻", "人気"], payouts, ["bet_type", "combination", "payout_display", "popularity"]))}
             </div>
             ${section("並び詳細", table(["ライン", "位置", "車番"], item.lineup || [], ["line_no", "line_position", "car_no"]))}
