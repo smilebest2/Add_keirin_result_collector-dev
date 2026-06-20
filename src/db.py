@@ -189,6 +189,24 @@ CREATE TABLE IF NOT EXISTS race_prediction_bet_result (
     FOREIGN KEY (prediction_bet_id) REFERENCES race_prediction_bet(id)
 );
 
+CREATE TABLE IF NOT EXISTS race_bet_recommendation (
+    race_id TEXT PRIMARY KEY,
+    race_date TEXT,
+    recommended_bet_type TEXT,
+    combinations_json TEXT,
+    confidence TEXT,
+    suitability_score REAL,
+    reason_text TEXT,
+    skip_reason TEXT,
+    similar_sample_count INTEGER,
+    similar_hit_rate REAL,
+    similar_roi REAL,
+    feature_json TEXT,
+    model_version TEXT,
+    created_at TEXT,
+    FOREIGN KEY (race_id) REFERENCES race_schedule(race_id)
+);
+
 CREATE TABLE IF NOT EXISTS race_line_features (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     race_id TEXT,
@@ -252,6 +270,8 @@ CREATE TABLE IF NOT EXISTS racer_line_condition_stats (
 
 CREATE INDEX IF NOT EXISTS idx_race_line_features_date
     ON race_line_features(race_date);
+CREATE INDEX IF NOT EXISTS idx_race_bet_recommendation_date
+    ON race_bet_recommendation(race_date);
 CREATE INDEX IF NOT EXISTS idx_race_line_features_racer
     ON race_line_features(racer_name, prefecture, term);
 CREATE INDEX IF NOT EXISTS idx_racer_line_condition_stats_lookup

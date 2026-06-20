@@ -3411,6 +3411,46 @@ def compact_lineup_text(lineup_text: str | None, entry_car_nos: str | None = Non
     return " ".join(str(car_no) for car_no in car_nos)
 
 
+def bet_recommendation_rows_for_date(conn, target_date: str | None) -> list[dict]:
+    if not target_date:
+        return []
+    recommendations = rows(
+        conn,
+        """
+        SELECT r.*, s.venue, s.race_no, s.race_title, s.start_time
+        FROM race_bet_recommendation r
+        LEFT JOIN race_schedule s ON s.race_id = r.race_id
+        WHERE r.race_date = ?
+        ORDER BY s.venue, s.race_no
+        """,
+        (target_date,),
+    )
+    result = []
+    for row in recommendations:
+        try:
+            combinations = json.loads(row.get("combinations_json") or "[]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            combinations = []
+        result.append({
+            **row,
+            "race": f'{row.get("venue") or ""} {row.get("race_no") or ""}R',
+            "recommended_bet_type": (
+                f'<span class="pill">{h(row.get("recommended_bet_type") or "見送り")}</span>'
+            ),
+            "buy": " / ".join(str(item) for item in combinations) or "-",
+            "confidence_display": f'<span class="pill">{h(row.get("confidence") or "C")}</span>',
+            "similar_result": (
+                f'{number(row.get("similar_sample_count") or 0)}件 / '
+                f'的中{decimal(row.get("similar_hit_rate"), 1)}% / '
+                f'回収{decimal(row.get("similar_roi"), 1)}%'
+                if row.get("similar_sample_count")
+                else "参考データ不足"
+            ),
+            "classification_reason": row.get("reason_text") or row.get("skip_reason") or "-",
+        })
+    return result
+
+
 def render_predictions(conn) -> str:
     target_date = scalar(conn, "SELECT MAX(race_date) FROM race_prediction")
     if not target_date:
@@ -3442,6 +3482,34 @@ def render_predictions(conn) -> str:
         ),
         ["prediction_type", "predictions", "avg_score"],
     ), "対象日の予想件数と平均スコアです。おすすめだけでなく、当日全レース予想も下に表示します。")
+
+    recommendation_rows = bet_recommendation_rows_for_date(conn, target_date)
+    if recommendation_rows:
+        body += section(
+            "レース別 推奨券種",
+            rich_table(
+                [
+                    "レース",
+                    "発走",
+                    "推奨券種",
+                    "買い目",
+                    "確信度",
+                    "類似レース実績",
+                    "分類根拠・見送り理由",
+                ],
+                recommendation_rows,
+                [
+                    "race",
+                    "start_time",
+                    "recommended_bet_type",
+                    "buy",
+                    "confidence_display",
+                    "similar_result",
+                    "classification_reason",
+                ],
+            ),
+            "予想時点オッズは使用せず、モデル評価差、直近成績、競走得点、正常なライン構成、過去類似レース成績から相対的に当てやすい券種を選びます。全券種が基準未満なら見送りです。",
+        )
 
     featured_rows = featured_prediction_rows(prediction_rows)
     if featured_rows:

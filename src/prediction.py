@@ -12,6 +12,7 @@ TRIFECTA = "3連単"
 STAKE_AMOUNT = 100
 MODEL_VERSION = "explainable-v3"
 BET_TYPES = ["2車複", "2車単", "ワイド", "3連複", "3連単"]
+RECOMMENDATION_MODEL_VERSION = "bet-fit-v1"
 
 PREDICTION_TYPES = [
     "本命予想",
@@ -68,6 +69,10 @@ def racer_history(conn, entry: dict, venue: str | None, target_date: str) -> dic
             "top3_rate": None,
             "venue_starts": 0,
             "venue_top3_rate": None,
+            "recent_starts": 0,
+            "recent_win_rate": None,
+            "recent_top2_rate": None,
+            "recent_top3_rate": None,
             "upset_score": 0,
             "fade_score": 0,
             "activity_score": 0,
@@ -95,6 +100,23 @@ def racer_history(conn, entry: dict, venue: str | None, target_date: str) -> dic
         WHERE {where} AND m.venue = ? AND m.race_date < ?
         """,
         [*params, venue, target_date],
+    ).fetchone()
+    recent_stats = conn.execute(
+        f"""
+        SELECT COUNT(*) AS starts,
+               AVG(CASE WHEN rank = 1 THEN 1.0 ELSE 0 END) * 100 AS win_rate,
+               AVG(CASE WHEN rank <= 2 THEN 1.0 ELSE 0 END) * 100 AS top2_rate,
+               AVG(CASE WHEN rank <= 3 THEN 1.0 ELSE 0 END) * 100 AS top3_rate
+        FROM (
+            SELECT r.rank
+            FROM race_result r
+            JOIN race_master m ON m.race_id = r.race_id
+            WHERE {where} AND m.race_date < ?
+            ORDER BY m.race_date DESC, m.race_no DESC
+            LIMIT 10
+        )
+        """,
+        [*params, target_date],
     ).fetchone()
     upset_score = scalar(
         conn,
@@ -130,6 +152,10 @@ def racer_history(conn, entry: dict, venue: str | None, target_date: str) -> dic
         "top3_rate": all_stats["top3_rate"],
         "venue_starts": venue_stats["starts"] or 0,
         "venue_top3_rate": venue_stats["top3_rate"],
+        "recent_starts": recent_stats["starts"] or 0,
+        "recent_win_rate": recent_stats["win_rate"],
+        "recent_top2_rate": recent_stats["top2_rate"],
+        "recent_top3_rate": recent_stats["top3_rate"],
         "upset_score": upset_score,
         "fade_score": fade_score,
         "activity_score": all_stats["starts"] or 0,
@@ -435,6 +461,394 @@ def bet_combinations(predicted: list[int]) -> dict[str, list[str]]:
     }
 
 
+def lineup_context(conn, race_id: str, axis_car_no: int) -> dict:
+    lineup = rows(
+        conn,
+        """
+        SELECT car_no, line_no, line_position
+        FROM race_lineup_forecast
+        WHERE race_id = ?
+        ORDER BY line_no, line_position
+        """,
+        (race_id,),
+    )
+    entry_car_nos = {
+        int(row["car_no"])
+        for row in rows(
+            conn,
+            "SELECT car_no FROM race_entry WHERE race_id = ?",
+            (race_id,),
+        )
+    }
+    lineup = normalize_lineup(lineup, entry_car_nos)
+    if not lineup:
+        return {
+            "available": False,
+            "line_count": None,
+            "bunsen_count": None,
+            "axis_followers": None,
+        }
+    line_sizes = {}
+    for row in lineup:
+        line_sizes[row["line_no"]] = line_sizes.get(row["line_no"], 0) + 1
+    axis = next(
+        (row for row in lineup if int(row["car_no"]) == int(axis_car_no)),
+        None,
+    )
+    return {
+        "available": True,
+        "line_count": len(line_sizes),
+        "bunsen_count": sum(size >= 2 for size in line_sizes.values()),
+        "axis_followers": (
+            line_sizes[axis["line_no"]] - axis["line_position"]
+            if axis
+            else None
+        ),
+    }
+
+
+def similar_bet_stats(
+    conn,
+    race: dict,
+    target_date: str,
+    field_size: int,
+    prediction_score: float,
+) -> dict[str, dict]:
+    historical = rows(
+        conn,
+        """
+        SELECT p.race_id, p.predicted_1st, p.predicted_2nd,
+               p.predicted_3rd, p.score, s.race_class,
+               b.bet_type, b.combination,
+               r.hit, r.return_amount, r.stake_amount
+        FROM race_prediction p
+        JOIN race_schedule s ON s.race_id = p.race_id
+        JOIN race_prediction_bet b ON b.prediction_id = p.id
+        JOIN race_prediction_bet_result r ON r.prediction_bet_id = b.id
+        WHERE p.prediction_type = ?
+          AND p.race_date < ?
+          AND (
+                SELECT COUNT(*)
+                FROM race_entry e
+                WHERE e.race_id = p.race_id
+              ) = ?
+          AND ABS(COALESCE(p.score, 0) - ?) <= 60
+        """,
+        (TYPE_HONMEI, target_date, field_size, prediction_score),
+    )
+    race_class = race.get("race_class") or ""
+    same_class = [
+        row for row in historical
+        if race_class and row.get("race_class") == race_class
+    ]
+    if len({row["race_id"] for row in same_class}) >= 10:
+        historical = same_class
+
+    grouped: dict[tuple[str, str], list[dict]] = {}
+    for row in historical:
+        grouped.setdefault((row["race_id"], row["bet_type"]), []).append(row)
+
+    result = {}
+    for bet_type in ("3連単", "3連複", "2車複", "ワイド"):
+        samples = []
+        for (race_id, historical_type), items in grouped.items():
+            if historical_type != bet_type:
+                continue
+            if bet_type == "ワイド":
+                axis = str(items[0]["predicted_1st"])
+                items = [
+                    item
+                    for item in items
+                    if axis in str(item["combination"]).split("=")
+                ]
+            if not items:
+                continue
+            samples.append({
+                "race_id": race_id,
+                "hit": any(item.get("hit") for item in items),
+                "return_amount": sum(int(item.get("return_amount") or 0) for item in items),
+                "stake_amount": sum(int(item.get("stake_amount") or 0) for item in items),
+            })
+        sample_count = len(samples)
+        stake = sum(item["stake_amount"] for item in samples)
+        result[bet_type] = {
+            "sample_count": sample_count,
+            "hit_rate": (
+                sum(item["hit"] for item in samples) * 100 / sample_count
+                if sample_count
+                else None
+            ),
+            "roi": (
+                sum(item["return_amount"] for item in samples) * 100 / stake
+                if stake
+                else None
+            ),
+        }
+    return result
+
+
+def classify_bet_fit(
+    scored: list[dict],
+    line_info: dict,
+    similar_stats: dict[str, dict],
+) -> dict:
+    ranked = sorted(scored, key=lambda row: row["base_score"], reverse=True)
+    if len(ranked) < 4:
+        return {
+            "bet_type": "見送り",
+            "combinations": [],
+            "confidence": "C",
+            "score": 0,
+            "reason": "",
+            "skip_reason": "出走選手または評価対象が4車未満です。",
+            "similar": {"sample_count": 0, "hit_rate": None, "roi": None},
+            "features": {"field_size": len(ranked)},
+        }
+
+    scores = [float(row["base_score"]) for row in ranked]
+    cars = [int(row["car_no"]) for row in ranked]
+    gap12 = scores[0] - scores[1]
+    gap23 = scores[1] - scores[2]
+    gap34 = scores[2] - scores[3]
+    gap13 = scores[0] - scores[2]
+    starts = [int(row.get("starts") or 0) for row in ranked[:3]]
+    recent_starts = [int(row.get("recent_starts") or 0) for row in ranked[:3]]
+    top2_rates = [float(row.get("top2_rate") or 0) for row in ranked[:3]]
+    top3_rates = [float(row.get("top3_rate") or 0) for row in ranked[:3]]
+    recent_top3_rates = [
+        float(row.get("recent_top3_rate") or 0)
+        for row in ranked[:3]
+    ]
+    competition_scores = [
+        float(row.get("score") or 0)
+        for row in ranked[:3]
+        if row.get("score") is not None
+    ]
+    avg_top2 = sum(top2_rates) / 3
+    avg_top3 = sum(top3_rates) / 3
+    avg_recent_top3 = sum(recent_top3_rates) / 3
+    avg_competition_score = (
+        sum(competition_scores) / len(competition_scores)
+        if competition_scores
+        else None
+    )
+    min_starts = min(starts)
+    min_recent_starts = min(recent_starts)
+    model_top3_stability = (
+        avg_top3 * 0.65
+        + avg_recent_top3 * 0.35
+        + min(gap34, 15) * 1.5
+    )
+
+    line_adjustment = 0
+    line_reasons = []
+    if line_info.get("available"):
+        line_count = int(line_info.get("line_count") or 0)
+        bunsen_count = int(line_info.get("bunsen_count") or 0)
+        axis_followers = int(line_info.get("axis_followers") or 0)
+        if 2 <= bunsen_count <= 3:
+            line_adjustment += 3
+        if axis_followers >= 1:
+            line_adjustment += 2
+        line_reasons.append(
+            f"ライン{line_count}本、分線数{bunsen_count}、軸候補の後続{axis_followers}人"
+        )
+    else:
+        line_reasons.append("正常なライン情報なし")
+
+    suitability = {
+        "3連単": gap12 * 1.4 + gap23 * 1.0 + gap34 * 0.8 + model_top3_stability * 0.15 + line_adjustment,
+        "3連複": gap34 * 2.0 + model_top3_stability * 0.35 - (gap12 + gap23) * 0.15,
+        "2車複": gap23 * 1.8 + avg_top2 * 0.25 + avg_recent_top3 * 0.10 - gap12 * 0.20,
+        "ワイド": gap13 * 0.8 + float(ranked[0].get("top3_rate") or 0) * 0.35 + float(ranked[0].get("recent_top3_rate") or 0) * 0.20,
+    }
+    minimums = {
+        "3連単": 35,
+        "3連複": 24,
+        "2車複": 24,
+        "ワイド": 24,
+    }
+    for bet_type, stats in similar_stats.items():
+        if stats.get("sample_count", 0) >= 30:
+            suitability[bet_type] += min(float(stats.get("hit_rate") or 0), 40) * 0.15
+            if stats.get("roi") is not None:
+                suitability[bet_type] += max(min((stats["roi"] - 70) / 10, 3), -3)
+
+    structural_fit = {
+        "3連単": (
+            gap12 >= 13.5
+            and gap23 >= 4.5
+            and gap34 >= 2.5
+            and model_top3_stability >= 45
+        ),
+        "3連複": gap34 >= 5.5 and model_top3_stability >= 45,
+        "2車複": gap23 >= 8 and avg_top2 >= 35,
+        "ワイド": (
+            float(ranked[0].get("top3_rate") or 0) * 0.65
+            + float(ranked[0].get("recent_top3_rate") or 0) * 0.35
+        ) >= 40,
+    }
+    eligible = [
+        bet_type
+        for bet_type in ("3連単", "3連複", "2車複", "ワイド")
+        if structural_fit[bet_type] and suitability[bet_type] >= minimums[bet_type]
+    ]
+    data_reasons = []
+    if min_starts < 5:
+        data_reasons.append("上位候補の過去出走数が少ない")
+    if min_recent_starts < 3:
+        data_reasons.append("上位候補の直近成績が不足")
+    if not line_info.get("available"):
+        data_reasons.append("ライン情報を評価できない")
+    if model_top3_stability < 35:
+        data_reasons.append("評価上位3車の安定度が低い")
+
+    if not eligible or len(data_reasons) >= 2:
+        return {
+            "bet_type": "見送り",
+            "combinations": [],
+            "confidence": "C",
+            "score": max(suitability.values()),
+            "reason": "",
+            "skip_reason": "、".join(data_reasons or ["全券種の適性が最低基準未満"]),
+            "similar": {"sample_count": 0, "hit_rate": None, "roi": None},
+            "features": {
+                "field_size": len(ranked),
+                "gap12": gap12,
+                "gap23": gap23,
+                "gap34": gap34,
+                "gap13": gap13,
+                "avg_top2": avg_top2,
+                "avg_top3": avg_top3,
+                "avg_recent_top3": avg_recent_top3,
+                "avg_competition_score": avg_competition_score,
+                "min_starts": min_starts,
+                "min_recent_starts": min_recent_starts,
+                **line_info,
+            },
+        }
+
+    bet_type = eligible[0]
+    combinations = {
+        "3連単": [f"{cars[0]}-{cars[1]}-{cars[2]}"],
+        "3連複": ["=".join(map(str, sorted(cars[:3])))],
+        "2車複": ["=".join(map(str, sorted(cars[:2])))],
+        "ワイド": [
+            "=".join(map(str, sorted((cars[0], cars[1])))),
+            "=".join(map(str, sorted((cars[0], cars[2])))),
+        ],
+    }[bet_type]
+    similar = similar_stats.get(
+        bet_type,
+        {"sample_count": 0, "hit_rate": None, "roi": None},
+    )
+    margin = suitability[bet_type] - max(
+        [value for key, value in suitability.items() if key != bet_type],
+        default=0,
+    )
+    confidence_value = suitability[bet_type]
+    if not line_info.get("available"):
+        confidence_value -= 5
+    if similar.get("sample_count", 0) < 30:
+        confidence_value -= 4
+    confidence_label = "A" if confidence_value >= 45 and margin >= 6 else "B" if confidence_value >= 30 else "C"
+    similar_text = (
+        f"類似{similar['sample_count']}レースの的中率{similar['hit_rate']:.1f}%、回収率{similar['roi']:.1f}%"
+        if similar.get("sample_count", 0) >= 10
+        and similar.get("hit_rate") is not None
+        and similar.get("roi") is not None
+        else f"類似レースは{similar.get('sample_count', 0)}件で参考不足"
+    )
+    reason = (
+        f"評価差 1-2位{gap12:.1f}、2-3位{gap23:.1f}、3-4位{gap34:.1f}。"
+        f"上位3車の過去3着内率平均{avg_top3:.1f}%、直近10走{avg_recent_top3:.1f}%。"
+        f"{f'競走得点平均{avg_competition_score:.1f}。' if avg_competition_score is not None else '競走得点未取得。'}"
+        f"{'、'.join(line_reasons)}。{similar_text}。"
+    )
+    return {
+        "bet_type": bet_type,
+        "combinations": combinations,
+        "confidence": confidence_label,
+        "score": suitability[bet_type],
+        "reason": reason,
+        "skip_reason": "",
+        "similar": similar,
+        "features": {
+            "field_size": len(ranked),
+            "gap12": gap12,
+            "gap23": gap23,
+            "gap34": gap34,
+            "gap13": gap13,
+            "avg_top2": avg_top2,
+            "avg_top3": avg_top3,
+            "avg_recent_top3": avg_recent_top3,
+            "avg_competition_score": avg_competition_score,
+            "min_starts": min_starts,
+            "min_recent_starts": min_recent_starts,
+            "model_top3_stability": model_top3_stability,
+                "suitability": suitability,
+                "structural_fit": structural_fit,
+                **line_info,
+        },
+    }
+
+
+def save_bet_recommendations(
+    conn,
+    races: list[dict],
+    scored_by_race: dict[str, list[dict]],
+    target_date: str,
+) -> int:
+    saved = 0
+    for race in races:
+        scored = scored_by_race.get(race["race_id"], [])
+        if len(scored) < 3:
+            continue
+        base_ranked = sorted(scored, key=lambda row: row["base_score"], reverse=True)
+        prediction_score = sum(float(row["base_score"]) for row in base_ranked[:3])
+        line_info = lineup_context(conn, race["race_id"], int(base_ranked[0]["car_no"]))
+        similar_stats = similar_bet_stats(
+            conn,
+            race,
+            target_date,
+            len(scored),
+            prediction_score,
+        )
+        recommendation = classify_bet_fit(scored, line_info, similar_stats)
+        similar = recommendation["similar"]
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO race_bet_recommendation
+                (
+                    race_id, race_date, recommended_bet_type,
+                    combinations_json, confidence, suitability_score,
+                    reason_text, skip_reason, similar_sample_count,
+                    similar_hit_rate, similar_roi, feature_json,
+                    model_version, created_at
+                )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                race["race_id"],
+                target_date,
+                recommendation["bet_type"],
+                json.dumps(recommendation["combinations"], ensure_ascii=False),
+                recommendation["confidence"],
+                round(float(recommendation["score"]), 3),
+                recommendation["reason"],
+                recommendation["skip_reason"],
+                int(similar.get("sample_count") or 0),
+                similar.get("hit_rate"),
+                similar.get("roi"),
+                json.dumps(recommendation["features"], ensure_ascii=False),
+                RECOMMENDATION_MODEL_VERSION,
+                datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
+        saved += 1
+    return saved
+
+
 def ensure_prediction_bets(conn) -> int:
     saved = 0
     predictions = rows(
@@ -506,6 +920,7 @@ def clear_date_predictions(conn, target_date: str) -> None:
         conn.executemany("DELETE FROM race_prediction_bet WHERE prediction_id = ?", [(item,) for item in prediction_ids])
         conn.executemany("DELETE FROM race_prediction_result WHERE prediction_id = ?", [(item,) for item in prediction_ids])
     conn.execute("DELETE FROM race_prediction WHERE race_date = ?", (target_date,))
+    conn.execute("DELETE FROM race_bet_recommendation WHERE race_date = ?", (target_date,))
 
 
 def clear_analysis_details_if_needed(conn) -> None:
@@ -525,9 +940,6 @@ def clear_analysis_details_if_needed(conn) -> None:
 def generate_predictions(conn, target_date: str, replace: bool = False) -> int:
     include_analysis_detail = is_dev_environment()
     existing = scalar(conn, "SELECT COUNT(*) FROM race_prediction WHERE race_date = ?", (target_date,)) or 0
-    if existing and not replace:
-        ensure_prediction_bets(conn)
-        return 0
     races = rows(
         conn,
         """
@@ -540,12 +952,27 @@ def generate_predictions(conn, target_date: str, replace: bool = False) -> int:
     )
     if replace:
         clear_date_predictions(conn, target_date)
+    scored_by_race = {
+        race["race_id"]: entry_scores(conn, race, target_date)
+        for race in races
+    }
+    recommendation_count = scalar(
+        conn,
+        "SELECT COUNT(*) FROM race_bet_recommendation WHERE race_date = ?",
+        (target_date,),
+    ) or 0
+    if replace or not recommendation_count:
+        save_bet_recommendations(conn, races, scored_by_race, target_date)
+    if existing and not replace:
+        conn.commit()
+        ensure_prediction_bets(conn)
+        return 0
     sample_kind = "backtest" if target_date < default_target_date() else "live"
     saved = 0
     for prediction_type in PREDICTION_TYPES:
         candidates = []
         for race in races:
-            scored = entry_scores(conn, race, target_date)
+            scored = scored_by_race[race["race_id"]]
             combo, score_value, reason, detail, detail_json = pick_combo(prediction_type, scored)
             if len(combo) != 3:
                 continue
