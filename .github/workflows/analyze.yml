@@ -1,8 +1,6 @@
 name: Analyze Keirin Results
 
 on:
-  schedule:
-    - cron: "10 15 * * *"
   workflow_dispatch:
 
 permissions:

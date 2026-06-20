@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .config import DATA_DIR, DB_PATH
+from .lineup_validation import lineup_groups, normalize_lineup
 
 
 SCHEMA = """
@@ -476,6 +477,20 @@ def save_race(conn: sqlite3.Connection, race: dict, results: list[dict], payouts
 
 def save_schedule(conn: sqlite3.Connection, race: dict, entries: list[dict]) -> None:
     now = datetime.now().isoformat(timespec="seconds")
+    entry_car_nos = {
+        int(item["car_no"])
+        for item in entries
+        if item.get("car_no") is not None
+    }
+    lineup = normalize_lineup(race.get("lineup", []), entry_car_nos)
+    lineup_text = (
+        " / ".join(
+            " ".join(str(item["car_no"]) for item in group)
+            for group in lineup_groups(lineup)
+        )
+        if lineup
+        else None
+    )
     try:
         conn.execute(
             """
@@ -505,7 +520,7 @@ def save_schedule(conn: sqlite3.Connection, race: dict, entries: list[dict]) -> 
                 race.get("temperature"),
                 race.get("wind_direction"),
                 race.get("wind_speed"),
-                race.get("lineup_text"),
+                lineup_text,
                 race["detail_url"],
                 now,
             ),
@@ -555,7 +570,7 @@ def save_schedule(conn: sqlite3.Connection, race: dict, entries: list[dict]) -> 
                     item.get("line_no"),
                     item.get("line_position"),
                 )
-                for item in race.get("lineup", [])
+                for item in lineup
             ],
         )
         conn.commit()

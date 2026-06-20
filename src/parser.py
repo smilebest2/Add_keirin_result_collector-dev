@@ -6,6 +6,7 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
 from .config import BASE_URL, VENUE_CODES
+from .lineup_validation import normalize_lineup
 
 
 DETAIL_RE = re.compile(r"/keirin/[^/]+/raceresult/(\d{10})/(\d+)/(\d+)")
@@ -178,6 +179,9 @@ def extract_lineup(html: str) -> dict:
                 }
             )
 
+    lineup = normalize_lineup(lineup)
+    if not lineup:
+        return {"lineup_text": None, "lineup": []}
     lineup_text = " / ".join(" ".join(str(car_no) for car_no in group) for group in groups)
     return {"lineup_text": lineup_text or None, "lineup": lineup}
 

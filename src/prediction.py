@@ -4,12 +4,13 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from .db import connect, init_db
+from .lineup_validation import normalize_lineup
 
 
 JST = timezone(timedelta(hours=9))
 TRIFECTA = "3連単"
 STAKE_AMOUNT = 100
-MODEL_VERSION = "explainable-v1"
+MODEL_VERSION = "explainable-v3"
 BET_TYPES = ["2車複", "2車単", "ワイド", "3連複", "3連単"]
 
 PREDICTION_TYPES = [
@@ -170,17 +171,36 @@ def car_context(conn, race: dict, car_no: int, target_date: str) -> dict:
     }
 
 
-def lineup_position(conn, race_id: str, car_no: int) -> int | None:
-    return scalar(
+def lineup_positions(conn, race_id: str) -> dict[int, int]:
+    lineup = rows(
         conn,
         """
-        SELECT line_position
+        SELECT car_no, line_no, line_position
         FROM race_lineup_forecast
-        WHERE race_id = ? AND car_no = ?
-        LIMIT 1
+        WHERE race_id = ?
+        ORDER BY line_no, line_position
         """,
-        (race_id, car_no),
+        (race_id,),
     )
+    entry_car_nos = {
+        int(row["car_no"])
+        for row in rows(
+            conn,
+            "SELECT car_no FROM race_entry WHERE race_id = ?",
+            (race_id,),
+        )
+    }
+    lineup = normalize_lineup(lineup, entry_car_nos)
+    if not lineup:
+        return {}
+    return {
+        int(row["car_no"]): int(row["line_position"])
+        for row in lineup
+    }
+
+
+def lineup_position(conn, race_id: str, car_no: int) -> int | None:
+    return lineup_positions(conn, race_id).get(int(car_no))
 
 
 def entry_scores(conn, race: dict, target_date: str) -> list[dict]:
@@ -195,25 +215,32 @@ def entry_scores(conn, race: dict, target_date: str) -> list[dict]:
         (race["race_id"],),
     )
     scored = []
+    positions = lineup_positions(conn, race["race_id"])
     for entry in entries:
         history = racer_history(conn, entry, race.get("venue"), target_date)
         context = car_context(conn, race, entry["car_no"], target_date)
-        line_pos = lineup_position(conn, race["race_id"], entry["car_no"])
-        line_bonus = 4 if line_pos == 1 else 2 if line_pos == 2 else 0
-        recent_component = (entry.get("score") or 0)
-        win_component = (entry.get("win_rate") or history.get("win_rate") or 0) * 0.32
-        top2_component = (entry.get("quinella_rate") or history.get("top2_rate") or 0) * 0.18
-        top3_component = (entry.get("trifecta_rate") or history.get("top3_rate") or 0) * 0.12
-        venue_component = (history.get("venue_top3_rate") or 0) * 0.08
-        car_component = context["venue_win_rate"] * 0.06
+        line_pos = positions.get(int(entry["car_no"]))
+        line_bonus = 0
+        recent_component = (entry.get("score") or 0) * 0.60
+        entry_win_component = (entry.get("win_rate") or 0) * 0.10
+        entry_top2_component = (entry.get("quinella_rate") or 0) * 0.20
+        entry_top3_component = (entry.get("trifecta_rate") or 0) * 0.15
+        history_win_component = (history.get("win_rate") or 0) * 0.35
+        history_top2_component = (history.get("top2_rate") or 0) * 0.20
+        history_top3_component = (history.get("top3_rate") or 0) * 0.20
+        venue_component = (history.get("venue_top3_rate") or 0) * 0.01
+        car_component = context["venue_win_rate"] * 0.02
         yesterday_component = 0
         if context["same_venue_yesterday"]:
-            yesterday_component = context["yesterday_top3"] * 0.08
+            yesterday_component = context["yesterday_top3"] * 0.05
         score_components = {
             "直近": recent_component,
-            "勝率": win_component,
-            "連対": top2_component,
-            "3着内": top3_component,
+            "出走表勝率": entry_win_component,
+            "出走表連対": entry_top2_component,
+            "出走表3着内": entry_top3_component,
+            "過去勝率": history_win_component,
+            "過去連対": history_top2_component,
+            "過去3着内": history_top3_component,
             "会場": venue_component,
             "車番": car_component,
             "ライン": line_bonus,
@@ -224,6 +251,9 @@ def entry_scores(conn, race: dict, target_date: str) -> list[dict]:
             **entry,
             **history,
             **context,
+            "entry_win_rate": entry.get("win_rate"),
+            "entry_top2_rate": entry.get("quinella_rate"),
+            "entry_top3_rate": entry.get("trifecta_rate"),
             "line_position": line_pos,
             "base_score": round(score_value, 3),
             "score_components": {key: round(value, 3) for key, value in score_components.items()},
@@ -248,7 +278,7 @@ def strategy_adjustments(prediction_type: str, row: dict) -> dict[str, float]:
     fade = max(metric(row, "fade_score"), 0)
     activity = metric(row, "activity_score")
     line_pos = row.get("line_position")
-    line_bonus = 6 if line_pos == 1 else 3 if line_pos == 2 else 0
+    line_bonus = 0
 
     if prediction_type == TYPE_HONMEI:
         return {
