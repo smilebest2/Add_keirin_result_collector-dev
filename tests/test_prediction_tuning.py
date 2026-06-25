@@ -1,10 +1,11 @@
 import unittest
 from unittest.mock import patch
 
-from src.prediction import MODEL_VERSION, entry_scores, lineup_position
+from src.prediction import MODEL_VERSION, confidence, entry_scores, lineup_position
 
 
 class PredictionTuningTest(unittest.TestCase):
+    @patch("src.prediction.pair_context_for_entries", return_value={1: {}})
     @patch("src.prediction.lineup_positions", return_value={1: 1})
     @patch(
         "src.prediction.car_context",
@@ -49,6 +50,7 @@ class PredictionTuningTest(unittest.TestCase):
         _history,
         _context,
         _lineup,
+        _pair_context,
     ):
         scored = entry_scores(
             object(),
@@ -56,14 +58,23 @@ class PredictionTuningTest(unittest.TestCase):
             "2026-06-20",
         )
 
-        self.assertEqual(MODEL_VERSION, "explainable-v3")
+        self.assertEqual(MODEL_VERSION, "explainable-v5")
         self.assertEqual(scored[0]["entry_win_rate"], 20)
         self.assertEqual(scored[0]["entry_top2_rate"], 40)
         self.assertEqual(scored[0]["entry_top3_rate"], 60)
         self.assertEqual(scored[0]["win_rate"], 10)
         self.assertEqual(scored[0]["top2_rate"], 30)
         self.assertEqual(scored[0]["top3_rate"], 50)
-        self.assertAlmostEqual(scored[0]["base_score"], 70.4)
+        self.assertAlmostEqual(scored[0]["base_score"], 71.6)
+        self.assertGreater(scored[0]["win_score"], scored[0]["base_score"])
+        self.assertGreater(scored[0]["top2_score"], scored[0]["base_score"])
+        self.assertGreater(scored[0]["top3_score"], scored[0]["base_score"])
+
+
+    def test_confidence_does_not_trust_overheated_scores(self):
+        self.assertEqual(confidence(190, True), "A")
+        self.assertEqual(confidence(240, True), "B")
+        self.assertEqual(confidence(320, True), "C")
 
     def test_corrupt_lineup_is_ignored(self):
         class Connection:

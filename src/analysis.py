@@ -3411,6 +3411,23 @@ def compact_lineup_text(lineup_text: str | None, entry_car_nos: str | None = Non
     return " ".join(str(car_no) for car_no in car_nos)
 
 
+def parse_feature_json(value) -> dict:
+    try:
+        return json.loads(value or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+
+
+def chaos_display(features: dict) -> str:
+    if not features:
+        return "-"
+    score = features.get("chaos_score")
+    level = features.get("chaos_level") or "-"
+    reasons = features.get("chaos_reasons") or []
+    score_text = decimal(score, 0) if score is not None else "-"
+    reason_text = "、".join(str(item) for item in reasons[:3])
+    return f"{score_text} / {level}" + (f" / {reason_text}" if reason_text else "")
+
 def bet_recommendation_rows_for_date(conn, target_date: str | None) -> list[dict]:
     if not target_date:
         return []
@@ -3431,9 +3448,11 @@ def bet_recommendation_rows_for_date(conn, target_date: str | None) -> list[dict
             combinations = json.loads(row.get("combinations_json") or "[]")
         except (TypeError, ValueError, json.JSONDecodeError):
             combinations = []
+        features = parse_feature_json(row.get("feature_json"))
         result.append({
             **row,
             "race": f'{row.get("venue") or ""} {row.get("race_no") or ""}R',
+            "chaos_display": chaos_display(features),
             "recommended_bet_type": (
                 f'<span class="pill">{h(row.get("recommended_bet_type") or "見送り")}</span>'
             ),
@@ -3495,6 +3514,7 @@ def render_predictions(conn) -> str:
                     "買い目",
                     "確信度",
                     "類似レース実績",
+                    "荒れ度",
                     "分類根拠・見送り理由",
                 ],
                 recommendation_rows,
@@ -3505,6 +3525,7 @@ def render_predictions(conn) -> str:
                     "buy",
                     "confidence_display",
                     "similar_result",
+                    "chaos_display",
                     "classification_reason",
                 ],
             ),
@@ -3703,6 +3724,7 @@ def render_prediction_results(conn) -> str:
                ROUND(SUM(r.return_amount) * 100.0 / NULLIF(SUM(r.stake_amount), 0), 1) AS roi
         FROM race_prediction p
         JOIN race_prediction_result r ON r.prediction_id = p.id
+        WHERE COALESCE(p.sample_kind, 'live') = 'live'
         GROUP BY p.prediction_type
     """)
     daily_trend = rows(conn, """
@@ -3744,7 +3766,9 @@ def render_prediction_results(conn) -> str:
                SUM(r.return_amount) AS return_total,
                ROUND(SUM(r.return_amount) * 100.0 / NULLIF(SUM(r.stake_amount), 0), 1) AS roi
         FROM race_prediction_bet b
+        JOIN race_prediction p ON p.id = b.prediction_id
         JOIN race_prediction_bet_result r ON r.prediction_bet_id = b.id
+        WHERE COALESCE(p.sample_kind, 'live') = 'live'
         GROUP BY b.bet_type
         ORDER BY CASE b.bet_type
             WHEN '2車複' THEN 1 WHEN '2車単' THEN 2 WHEN 'ワイド' THEN 3
@@ -3759,7 +3783,9 @@ def render_prediction_results(conn) -> str:
                SUM(r.return_amount) AS return_total,
                ROUND(SUM(r.return_amount) * 100.0 / NULLIF(SUM(r.stake_amount), 0), 1) AS roi
         FROM race_prediction_bet b
+        JOIN race_prediction p ON p.id = b.prediction_id
         JOIN race_prediction_bet_result r ON r.prediction_bet_id = b.id
+        WHERE COALESCE(p.sample_kind, 'live') = 'live'
         GROUP BY b.prediction_type, b.bet_type
         ORDER BY b.prediction_type, CASE b.bet_type
             WHEN '2車複' THEN 1 WHEN '2車単' THEN 2 WHEN 'ワイド' THEN 3
@@ -3861,7 +3887,7 @@ def render_prediction_results(conn) -> str:
         }
         for row in bet_type_total
     ]
-    body += section("累積 賭式別成績", table(
+    body += section("累積 live 賭式別成績", table(
         ["賭式", "買い目数", "的中", "的中率", "投資額", "払戻額", "回収率"],
         bet_total_display,
         ["bet_type", "tickets", "hits", "hit_rate", "stake_total", "return_total", "roi"],
@@ -4021,7 +4047,7 @@ def render_prediction_results(conn) -> str:
         format_stats(daily_rows),
         ["prediction_type", "predictions", "exact_hits", "exact_rate", "first_rate", "avg_top3_count", "stake_total", "return_total", "roi"],
     ))
-    body += section("累積 予想タイプ別成績", table(
+    body += section("累積 live 予想タイプ別成績", table(
         ["予想タイプ", "予想数", "完全的中", "完全的中率", "1着的中率", "3着内一致平均", "投資額", "払戻額", "回収率"],
         format_stats(total),
         ["prediction_type", "predictions", "exact_hits", "exact_rate", "first_rate", "avg_top3_count", "stake_total", "return_total", "roi"],
@@ -4045,7 +4071,7 @@ def render_prediction_results(conn) -> str:
             ),
         )
     ]
-    body += section("累積 予想タイプ×賭式別成績", table(
+    body += section("累積 live 予想タイプ×賭式別成績", table(
         ["予想タイプ", "賭式", "買い目数", "的中", "的中率", "投資額", "払戻額", "回収率"],
         type_bet_display,
         ["prediction_type", "bet_type", "tickets", "hits", "hit_rate", "stake_total", "return_total", "roi"],

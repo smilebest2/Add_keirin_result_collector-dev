@@ -238,6 +238,33 @@ CREATE TABLE IF NOT EXISTS race_line_features (
     FOREIGN KEY (race_id) REFERENCES race_master(race_id)
 );
 
+
+CREATE TABLE IF NOT EXISTS racer_pair_stats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    racer_key_a TEXT,
+    racer_key_b TEXT,
+    racer_name_a TEXT,
+    racer_name_b TEXT,
+    prefecture_a TEXT,
+    prefecture_b TEXT,
+    term_a INTEGER,
+    term_b INTEGER,
+    races_together INTEGER,
+    a_ahead_count INTEGER,
+    b_ahead_count INTEGER,
+    both_top2_count INTEGER,
+    both_top3_count INTEGER,
+    a_first_b_second_count INTEGER,
+    b_first_a_second_count INTEGER,
+    wide_count INTEGER,
+    quinella_count INTEGER,
+    avg_rank_sum REAL,
+    min_race_date TEXT,
+    max_race_date TEXT,
+    updated_at TEXT,
+    UNIQUE (racer_key_a, racer_key_b)
+);
+
 CREATE TABLE IF NOT EXISTS racer_line_condition_stats (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     racer_name TEXT,
@@ -268,10 +295,22 @@ CREATE TABLE IF NOT EXISTS racer_line_condition_stats (
     UNIQUE (racer_name, prefecture, term, condition_type, condition_key)
 );
 
+CREATE INDEX IF NOT EXISTS idx_racer_pair_stats_lookup
+    ON racer_pair_stats(racer_key_a, racer_key_b);
+CREATE INDEX IF NOT EXISTS idx_racer_pair_stats_sample
+    ON racer_pair_stats(races_together);
 CREATE INDEX IF NOT EXISTS idx_race_line_features_date
     ON race_line_features(race_date);
 CREATE INDEX IF NOT EXISTS idx_race_bet_recommendation_date
     ON race_bet_recommendation(race_date);
+CREATE INDEX IF NOT EXISTS idx_race_prediction_similarity
+    ON race_prediction(prediction_type, race_date, score);
+CREATE INDEX IF NOT EXISTS idx_race_prediction_bet_prediction
+    ON race_prediction_bet(prediction_id, bet_type);
+CREATE INDEX IF NOT EXISTS idx_race_prediction_bet_result_lookup
+    ON race_prediction_bet_result(prediction_bet_id);
+CREATE INDEX IF NOT EXISTS idx_race_entry_race_id
+    ON race_entry(race_id);
 CREATE INDEX IF NOT EXISTS idx_race_line_features_racer
     ON race_line_features(racer_name, prefecture, term);
 CREATE INDEX IF NOT EXISTS idx_racer_line_condition_stats_lookup

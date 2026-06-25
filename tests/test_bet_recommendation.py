@@ -23,6 +23,11 @@ EMPTY_SIMILAR = {
     for bet_type in ("3連単", "3連複", "2車複", "ワイド")
 }
 
+SIMILAR_EVIDENCE = {
+    bet_type: {"sample_count": 30, "hit_rate": 20, "roi": 100}
+    for bet_type in ("3連単", "3連複", "2車複", "ワイド")
+}
+
 
 class BetRecommendationTest(unittest.TestCase):
     def test_schema_contains_recommendation_table(self):
@@ -48,7 +53,7 @@ class BetRecommendationTest(unittest.TestCase):
         result = classify_bet_fit(
             scored,
             {"available": True, "line_count": 3, "bunsen_count": 3, "axis_followers": 1},
-            EMPTY_SIMILAR,
+            SIMILAR_EVIDENCE,
         )
         self.assertEqual(result["bet_type"], "3連単")
         self.assertEqual(result["combinations"], ["1-2-3"])
@@ -63,7 +68,7 @@ class BetRecommendationTest(unittest.TestCase):
         result = classify_bet_fit(
             scored,
             {"available": True, "line_count": 3, "bunsen_count": 2, "axis_followers": 0},
-            EMPTY_SIMILAR,
+            SIMILAR_EVIDENCE,
         )
         self.assertEqual(result["bet_type"], "3連複")
         self.assertEqual(result["combinations"], ["1=2=3"])
@@ -78,7 +83,7 @@ class BetRecommendationTest(unittest.TestCase):
         result = classify_bet_fit(
             scored,
             {"available": True, "line_count": 3, "bunsen_count": 2, "axis_followers": 0},
-            EMPTY_SIMILAR,
+            SIMILAR_EVIDENCE,
         )
         self.assertEqual(result["bet_type"], "2車複")
         self.assertEqual(result["combinations"], ["1=2"])
@@ -93,10 +98,42 @@ class BetRecommendationTest(unittest.TestCase):
         result = classify_bet_fit(
             scored,
             {"available": True, "line_count": 4, "bunsen_count": 2, "axis_followers": 0},
-            EMPTY_SIMILAR,
+            SIMILAR_EVIDENCE,
         )
         self.assertEqual(result["bet_type"], "ワイド")
         self.assertEqual(result["combinations"], ["1=2", "1=3"])
+
+
+    def test_low_similar_sample_is_skipped(self):
+        scored = [
+            scored_row(1, 90),
+            scored_row(2, 70),
+            scored_row(3, 55),
+            scored_row(4, 45),
+        ]
+        result = classify_bet_fit(
+            scored,
+            {"available": True, "line_count": 3, "bunsen_count": 3, "axis_followers": 1},
+            EMPTY_SIMILAR,
+        )
+        self.assertEqual(result["bet_type"], "見送り")
+        self.assertIn("類似レース実績が不足", result["skip_reason"])
+
+    def test_high_chaos_race_is_skipped(self):
+        scored = [
+            scored_row(1, 80, starts=2, top2=25, top3=30, recent_top3=25),
+            scored_row(2, 79, starts=2, top2=25, top3=30, recent_top3=25),
+            scored_row(3, 78, starts=2, top2=25, top3=30, recent_top3=25),
+            scored_row(4, 77, starts=2, top2=25, top3=30, recent_top3=25),
+        ]
+        result = classify_bet_fit(
+            scored,
+            {"available": False, "line_count": None, "bunsen_count": None, "axis_followers": None},
+            EMPTY_SIMILAR,
+        )
+        self.assertEqual(result["bet_type"], "見送り")
+        self.assertEqual(result["features"]["chaos_level"], "high")
+        self.assertIn("荒れ度が高い", result["skip_reason"])
 
     def test_missing_history_and_lineup_is_skipped(self):
         scored = [

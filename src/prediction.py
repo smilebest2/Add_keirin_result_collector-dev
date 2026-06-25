@@ -5,14 +5,15 @@ from datetime import datetime, timedelta, timezone
 
 from .db import connect, init_db
 from .lineup_validation import normalize_lineup
+from .pair_stats import pair_context_for_entries, refresh_racer_pair_stats
 
 
 JST = timezone(timedelta(hours=9))
 TRIFECTA = "3連単"
 STAKE_AMOUNT = 100
-MODEL_VERSION = "explainable-v3"
+MODEL_VERSION = "explainable-v5"
 BET_TYPES = ["2車複", "2車単", "ワイド", "3連複", "3連単"]
-RECOMMENDATION_MODEL_VERSION = "bet-fit-v1"
+RECOMMENDATION_MODEL_VERSION = "bet-fit-v3"
 
 PREDICTION_TYPES = [
     "本命予想",
@@ -242,11 +243,19 @@ def entry_scores(conn, race: dict, target_date: str) -> list[dict]:
     )
     scored = []
     positions = lineup_positions(conn, race["race_id"])
+    pair_context = pair_context_for_entries(conn, entries)
     for entry in entries:
         history = racer_history(conn, entry, race.get("venue"), target_date)
         context = car_context(conn, race, entry["car_no"], target_date)
         line_pos = positions.get(int(entry["car_no"]))
-        line_bonus = 0
+        if line_pos == 1:
+            line_bonus = 1.2
+        elif line_pos == 2:
+            line_bonus = 2.2
+        elif line_pos and line_pos >= 3:
+            line_bonus = 0.8
+        else:
+            line_bonus = -1.0 if positions else 0
         recent_component = (entry.get("score") or 0) * 0.60
         entry_win_component = (entry.get("win_rate") or 0) * 0.10
         entry_top2_component = (entry.get("quinella_rate") or 0) * 0.20
@@ -259,6 +268,15 @@ def entry_scores(conn, race: dict, target_date: str) -> list[dict]:
         yesterday_component = 0
         if context["same_venue_yesterday"]:
             yesterday_component = context["yesterday_top3"] * 0.05
+        pair = pair_context.get(int(entry["car_no"]), {})
+        pair_races = int(pair.get("pair_races") or 0)
+        pair_ahead_rate = pair.get("pair_ahead_rate")
+        pair_top2_rate = pair.get("pair_top2_rate")
+        pair_top3_rate = pair.get("pair_top3_rate")
+        pair_weight = min(pair_races / 20, 1.0)
+        pair_ahead_component = ((pair_ahead_rate or 50) - 50) * 0.08 * pair_weight
+        pair_top2_component = ((pair_top2_rate or 0) - 25) * 0.06 * pair_weight
+        pair_top3_component = ((pair_top3_rate or 0) - 40) * 0.05 * pair_weight
         score_components = {
             "直近": recent_component,
             "出走表勝率": entry_win_component,
@@ -271,8 +289,32 @@ def entry_scores(conn, race: dict, target_date: str) -> list[dict]:
             "車番": car_component,
             "ライン": line_bonus,
             "前日同会場": yesterday_component,
+            "直接対戦先着": pair_ahead_component,
+            "pair連対": pair_top2_component,
+            "pair3着内": pair_top3_component,
         }
         score_value = sum(score_components.values())
+        win_score = (
+            score_value
+            + recent_component * 0.20
+            + entry_win_component * 1.20
+            + history_win_component * 0.90
+            + pair_ahead_component * 1.40
+        )
+        top2_score = (
+            score_value
+            + entry_top2_component * 0.85
+            + history_top2_component * 0.70
+            + pair_top2_component * 1.70
+            + pair_ahead_component * 0.70
+        )
+        top3_score = (
+            score_value
+            + entry_top3_component * 0.75
+            + history_top3_component * 0.70
+            + pair_top3_component * 1.80
+            + line_bonus * 0.50
+        )
         scored.append({
             **entry,
             **history,
@@ -280,11 +322,34 @@ def entry_scores(conn, race: dict, target_date: str) -> list[dict]:
             "entry_win_rate": entry.get("win_rate"),
             "entry_top2_rate": entry.get("quinella_rate"),
             "entry_top3_rate": entry.get("trifecta_rate"),
+            "pair_races": pair_races,
+            "pair_samples": int(pair.get("pair_samples") or 0),
+            "pair_ahead_rate": pair_ahead_rate,
+            "pair_top2_rate": pair_top2_rate,
+            "pair_top3_rate": pair_top3_rate,
+            "pair_rank_sum": pair.get("pair_rank_sum"),
             "line_position": line_pos,
             "base_score": round(score_value, 3),
+            "win_score": round(win_score, 3),
+            "top2_score": round(top2_score, 3),
+            "top3_score": round(top3_score, 3),
             "score_components": {key: round(value, 3) for key, value in score_components.items()},
         })
     return scored
+
+
+def slot_ranked(scored: list[dict]) -> list[dict]:
+    remaining = list(scored)
+    picked = []
+    for key in ("win_score", "top2_score", "top3_score"):
+        if not remaining:
+            break
+        row = max(remaining, key=lambda item: metric(item, key))
+        picked.append(row)
+        remaining = [item for item in remaining if int(item["car_no"]) != int(row["car_no"])]
+    if len(picked) < 3:
+        picked = take_unique(picked, sorted(scored, key=lambda row: row["base_score"], reverse=True))
+    return picked
 
 
 def metric(row: dict, key: str) -> float:
@@ -304,7 +369,14 @@ def strategy_adjustments(prediction_type: str, row: dict) -> dict[str, float]:
     fade = max(metric(row, "fade_score"), 0)
     activity = metric(row, "activity_score")
     line_pos = row.get("line_position")
-    line_bonus = 0
+    if line_pos == 1:
+        line_bonus = 2.0
+    elif line_pos == 2:
+        line_bonus = 4.0
+    elif line_pos and line_pos >= 3:
+        line_bonus = 1.5
+    else:
+        line_bonus = 0
 
     if prediction_type == TYPE_HONMEI:
         return {
@@ -351,6 +423,14 @@ def score_detail(prediction_type: str, row: dict) -> dict:
         "base_score": round(metric(row, "base_score"), 1),
         "type_adjustment": round(sum(adjustments.values()), 1),
         "final_score": round(final_score, 1),
+        "slot_scores": {
+            "win_score": round(metric(row, "win_score"), 1),
+            "top2_score": round(metric(row, "top2_score"), 1),
+            "top3_score": round(metric(row, "top3_score"), 1),
+            "pair_races": int(row.get("pair_races") or 0),
+            "pair_ahead_rate": round(metric(row, "pair_ahead_rate"), 1),
+            "pair_top3_rate": round(metric(row, "pair_top3_rate"), 1),
+        },
         "base_components": {
             key: round(value, 1)
             for key, value in (row.get("score_components") or {}).items()
@@ -402,11 +482,12 @@ def pick_combo(prediction_type: str, scored: list[dict]) -> tuple[list[int], flo
         return [], 0, "出走表データが不足しています。", "", ""
 
     base_ranked = sorted(scored, key=lambda row: row["base_score"], reverse=True)
+    slot_rank = slot_ranked(scored)
     strategy_ranked = sorted(scored, key=lambda row: strategy_value(prediction_type, row), reverse=True)
 
     if prediction_type == TYPE_HONMEI:
-        ranked = base_ranked
-        reason = "選手成績、会場傾向、車番傾向を総合して上位評価。"
+        ranked = slot_rank
+        reason = "1着軸、2着以内、3着残りの適性を分け、直接対戦とpair相性も加味して上位評価。"
     elif prediction_type == TYPE_ANA:
         ranked = take_unique(strategy_ranked[1:4], strategy_ranked, base_ranked)
         reason = "本命寄りになりすぎないよう、会場相性と3着内の余地がある中位上昇候補を重視。"
@@ -422,6 +503,11 @@ def pick_combo(prediction_type: str, scored: list[dict]) -> tuple[list[int], flo
 
     combo = [int(row["car_no"]) for row in ranked[:3]]
     score_value = sum(strategy_value(prediction_type, row) for row in ranked[:3])
+    if prediction_type == TYPE_HONMEI:
+        score_value = sum(
+            metric(row, key)
+            for row, key in zip(ranked[:3], ("win_score", "top2_score", "top3_score"))
+        )
     if not any(row.get("same_venue_yesterday") for row in scored):
         reason += " 前日同会場データなしのため、累積会場傾向と選手成績を優先。"
     else:
@@ -437,9 +523,9 @@ def pick_combo(prediction_type: str, scored: list[dict]) -> tuple[list[int], flo
 
 
 def confidence(score_value: float, has_same_venue_yesterday: bool) -> str:
-    if score_value >= 300 and has_same_venue_yesterday:
+    if 180 <= score_value < 220:
         return "A"
-    if score_value >= 220:
+    if 220 <= score_value < 300:
         return "B"
     return "C"
 
@@ -532,9 +618,9 @@ def similar_bet_stats(
                 FROM race_entry e
                 WHERE e.race_id = p.race_id
               ) = ?
-          AND ABS(COALESCE(p.score, 0) - ?) <= 60
+          AND p.score BETWEEN ? AND ?
         """,
-        (TYPE_HONMEI, target_date, field_size, prediction_score),
+        (TYPE_HONMEI, target_date, field_size, prediction_score - 60, prediction_score + 60),
     )
     race_class = race.get("race_class") or ""
     same_class = [
@@ -586,6 +672,69 @@ def similar_bet_stats(
         }
     return result
 
+
+def chaos_level(score: float) -> str:
+    if score >= 75:
+        return "high"
+    if score >= 55:
+        return "medium"
+    return "low"
+
+
+def chaos_score_from_features(
+    gap12: float,
+    gap23: float,
+    gap34: float,
+    avg_top2: float,
+    avg_top3: float,
+    min_starts: int,
+    min_recent_starts: int,
+    line_info: dict,
+    prediction_score: float,
+) -> tuple[float, list[str]]:
+    score = 0.0
+    reasons = []
+    if gap12 < 4:
+        score += 14
+        reasons.append("1-2評価差が小さい")
+    if gap23 < 4:
+        score += 16
+        reasons.append("2-3評価差が小さい")
+    if gap34 < 3:
+        score += 14
+        reasons.append("3着候補が混戦")
+    if avg_top2 < 35:
+        score += 10
+        reasons.append("上位の連対率が低い")
+    if avg_top3 < 45:
+        score += 10
+        reasons.append("上位の3着内率が低い")
+    if min_starts < 5:
+        score += 12
+        reasons.append("過去出走数が少ない")
+    if min_recent_starts < 3:
+        score += 10
+        reasons.append("直近材料が少ない")
+    if not line_info.get("available"):
+        score += 18
+        reasons.append("ライン情報なし")
+    else:
+        line_count = int(line_info.get("line_count") or 0)
+        bunsen_count = int(line_info.get("bunsen_count") or 0)
+        axis_followers = int(line_info.get("axis_followers") or 0)
+        if line_count >= 4:
+            score += 8
+            reasons.append("分線が多い")
+        if bunsen_count <= 1:
+            score += 10
+            reasons.append("主導ラインが少ない")
+        if axis_followers == 0:
+            score += 8
+            reasons.append("軸に後続ラインなし")
+    if prediction_score >= 300:
+        score += 18
+        reasons.append("高スコア帯の過信注意")
+    return min(score, 100.0), reasons
 
 def classify_bet_fit(
     scored: list[dict],
@@ -639,6 +788,7 @@ def classify_bet_fit(
         + avg_recent_top3 * 0.35
         + min(gap34, 15) * 1.5
     )
+    prediction_score = sum(scores[:3])
 
     line_adjustment = 0
     line_reasons = []
@@ -662,10 +812,27 @@ def classify_bet_fit(
         "2車複": gap23 * 1.8 + avg_top2 * 0.25 + avg_recent_top3 * 0.10 - gap12 * 0.20,
         "ワイド": gap13 * 0.8 + float(ranked[0].get("top3_rate") or 0) * 0.35 + float(ranked[0].get("recent_top3_rate") or 0) * 0.20,
     }
+    chaos_score, chaos_reasons = chaos_score_from_features(
+        gap12,
+        gap23,
+        gap34,
+        avg_top2,
+        avg_top3,
+        min_starts,
+        min_recent_starts,
+        line_info,
+        prediction_score,
+    )
+    chaos = chaos_level(chaos_score)
+    suitability["3連単"] -= chaos_score * 0.35
+    suitability["3連複"] -= chaos_score * 0.15
+    suitability["2車複"] -= chaos_score * 0.08
+    suitability["ワイド"] += max(0, chaos_score - 45) * 0.05
+
     minimums = {
-        "3連単": 35,
-        "3連複": 24,
-        "2車複": 24,
+        "3連単": 38,
+        "3連複": 26,
+        "2車複": 25,
         "ワイド": 24,
     }
     for bet_type, stats in similar_stats.items():
@@ -676,7 +843,9 @@ def classify_bet_fit(
 
     structural_fit = {
         "3連単": (
-            gap12 >= 13.5
+            chaos != "high"
+            and prediction_score < 300
+            and gap12 >= 13.5
             and gap23 >= 4.5
             and gap34 >= 2.5
             and model_top3_stability >= 45
@@ -702,6 +871,8 @@ def classify_bet_fit(
         data_reasons.append("ライン情報を評価できない")
     if model_top3_stability < 35:
         data_reasons.append("評価上位3車の安定度が低い")
+    if chaos == "high":
+        data_reasons.append("荒れ度が高い")
 
     if not eligible or len(data_reasons) >= 2:
         return {
@@ -724,11 +895,50 @@ def classify_bet_fit(
                 "avg_competition_score": avg_competition_score,
                 "min_starts": min_starts,
                 "min_recent_starts": min_recent_starts,
+                "prediction_score": prediction_score,
+                "chaos_score": chaos_score,
+                "chaos_level": chaos,
+                "chaos_reasons": chaos_reasons,
                 **line_info,
             },
         }
 
     bet_type = eligible[0]
+    similar = similar_stats.get(
+        bet_type,
+        {"sample_count": 0, "hit_rate": None, "roi": None},
+    )
+    if int(similar.get("sample_count") or 0) < 10:
+        return {
+            "bet_type": "見送り",
+            "combinations": [],
+            "confidence": "C",
+            "score": suitability[bet_type],
+            "reason": "",
+            "skip_reason": "類似レース実績が不足",
+            "similar": similar,
+            "features": {
+                "field_size": len(ranked),
+                "gap12": gap12,
+                "gap23": gap23,
+                "gap34": gap34,
+                "gap13": gap13,
+                "avg_top2": avg_top2,
+                "avg_top3": avg_top3,
+                "avg_recent_top3": avg_recent_top3,
+                "avg_competition_score": avg_competition_score,
+                "min_starts": min_starts,
+                "min_recent_starts": min_recent_starts,
+                "model_top3_stability": model_top3_stability,
+                "prediction_score": prediction_score,
+                "chaos_score": chaos_score,
+                "chaos_level": chaos,
+                "chaos_reasons": chaos_reasons,
+                "suitability": suitability,
+                "structural_fit": structural_fit,
+                **line_info,
+            },
+        }
     combinations = {
         "3連単": [f"{cars[0]}-{cars[1]}-{cars[2]}"],
         "3連複": ["=".join(map(str, sorted(cars[:3])))],
@@ -738,20 +948,16 @@ def classify_bet_fit(
             "=".join(map(str, sorted((cars[0], cars[2])))),
         ],
     }[bet_type]
-    similar = similar_stats.get(
-        bet_type,
-        {"sample_count": 0, "hit_rate": None, "roi": None},
-    )
     margin = suitability[bet_type] - max(
         [value for key, value in suitability.items() if key != bet_type],
         default=0,
     )
-    confidence_value = suitability[bet_type]
+    confidence_value = suitability[bet_type] - chaos_score * 0.2
     if not line_info.get("available"):
         confidence_value -= 5
     if similar.get("sample_count", 0) < 30:
         confidence_value -= 4
-    confidence_label = "A" if confidence_value >= 45 and margin >= 6 else "B" if confidence_value >= 30 else "C"
+    confidence_label = "A" if chaos == "low" and confidence_value >= 45 and margin >= 6 else "B" if chaos != "high" and confidence_value >= 30 else "C"
     similar_text = (
         f"類似{similar['sample_count']}レースの的中率{similar['hit_rate']:.1f}%、回収率{similar['roi']:.1f}%"
         if similar.get("sample_count", 0) >= 10
@@ -786,9 +992,13 @@ def classify_bet_fit(
             "min_starts": min_starts,
             "min_recent_starts": min_recent_starts,
             "model_top3_stability": model_top3_stability,
-                "suitability": suitability,
-                "structural_fit": structural_fit,
-                **line_info,
+            "prediction_score": prediction_score,
+            "chaos_score": chaos_score,
+            "chaos_level": chaos,
+            "chaos_reasons": chaos_reasons,
+            "suitability": suitability,
+            "structural_fit": structural_fit,
+            **line_info,
         },
     }
 
@@ -952,6 +1162,7 @@ def generate_predictions(conn, target_date: str, replace: bool = False) -> int:
     )
     if replace:
         clear_date_predictions(conn, target_date)
+    refresh_racer_pair_stats(conn, before_date=target_date)
     scored_by_race = {
         race["race_id"]: entry_scores(conn, race, target_date)
         for race in races
