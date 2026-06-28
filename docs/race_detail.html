@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>[DEV] レース詳細 | 競輪統計</title>
+  <title>レース詳細 | 競輪統計</title>
   <style>
     :root {
       --bg: #f5f7f9;
@@ -327,6 +327,74 @@
       color: var(--muted);
       font-size: 13px;
     }
+    .decision-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(150px, 1fr));
+      gap: 10px;
+      padding: 14px 15px 0;
+    }
+    .decision-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fbfcfd;
+    }
+    .decision-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .decision-card strong {
+      display: block;
+      margin-top: 4px;
+      font-size: 22px;
+      line-height: 1.15;
+    }
+    .decision-card small {
+      display: block;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .pill.buy {
+      background: #dcfce7;
+      color: #166534;
+    }
+    .pill.caution {
+      background: #fef3c7;
+      color: #92400e;
+    }
+    .result-focus {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(180px, 1fr));
+      gap: 10px;
+      padding: 14px 15px 0;
+    }
+    .result-focus .decision-card {
+      background: #ffffff;
+    }
+    .result-focus .hit strong {
+      color: #166534;
+    }
+    .result-focus .return strong {
+      color: var(--accent);
+    }
+    .result-focus .miss strong {
+      color: #991b1b;
+    }
+    .analysis-fold {
+      margin-top: 16px;
+    }
+    .analysis-fold > summary {
+      cursor: pointer;
+      padding: 13px 15px;
+      color: var(--accent);
+      font-weight: 800;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfd;
+    }
     tr.sample-low td {
       opacity: 0.48;
       background: #f8fafc;
@@ -627,6 +695,8 @@
       table { min-width: 760px; }
       .bar-row { grid-template-columns: 96px minmax(130px, 1fr) 74px; }
       .filters { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+      .decision-grid { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+      .result-focus { grid-template-columns: 1fr; }
       .prediction-type-grid { grid-template-columns: 1fr; }
       .analysis-metrics { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
       .analysis-panels { grid-template-columns: 1fr; }
@@ -636,8 +706,8 @@
     }
   </style>
 </head>
-<body class="is-dev">
-  <div class="env-banner">DEV環境</div>
+<body>
+
   <header>
     <div class="wrap">
       <h1>レース詳細</h1>

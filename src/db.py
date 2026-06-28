@@ -103,6 +103,17 @@ CREATE TABLE IF NOT EXISTS race_entry (
     gear_ratio REAL,
     leg_type TEXT,
     score REAL,
+    start_count INTEGER,
+    home_count INTEGER,
+    back_count INTEGER,
+    escape_count INTEGER,
+    makuri_count INTEGER,
+    sashi_count INTEGER,
+    mark_count INTEGER,
+    first_count INTEGER,
+    second_count INTEGER,
+    third_count INTEGER,
+    outside_count INTEGER,
     win_rate REAL,
     quinella_rate REAL,
     trifecta_rate REAL,
@@ -238,6 +249,133 @@ CREATE TABLE IF NOT EXISTS race_line_features (
     FOREIGN KEY (race_id) REFERENCES race_master(race_id)
 );
 
+CREATE TABLE IF NOT EXISTS race_entry_features (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    race_id TEXT NOT NULL,
+    race_date TEXT NOT NULL DEFAULT '',
+    venue TEXT NOT NULL DEFAULT '',
+    race_no INTEGER NOT NULL DEFAULT 0,
+    car_no INTEGER NOT NULL,
+    racer_name TEXT NOT NULL DEFAULT '',
+    rank INTEGER NOT NULL DEFAULT 0,
+    is_top3 INTEGER NOT NULL DEFAULT 0,
+    line_no INTEGER NOT NULL DEFAULT 0,
+    line_member_count INTEGER NOT NULL DEFAULT 0,
+    line_average_score REAL NOT NULL DEFAULT 0,
+    line_max_score REAL NOT NULL DEFAULT 0,
+    line_min_score REAL NOT NULL DEFAULT 0,
+    line_score_std REAL NOT NULL DEFAULT 0,
+    line_average_win_rate REAL NOT NULL DEFAULT 0,
+    line_average_top3_rate REAL NOT NULL DEFAULT 0,
+    line_average_age REAL NOT NULL DEFAULT 0,
+    line_average_bs REAL NOT NULL DEFAULT 0,
+    line_average_escape REAL NOT NULL DEFAULT 0,
+    line_average_dash REAL NOT NULL DEFAULT 0,
+    line_average_mark REAL NOT NULL DEFAULT 0,
+    line_average_chase REAL NOT NULL DEFAULT 0,
+    line_total_escape REAL NOT NULL DEFAULT 0,
+    line_total_dash REAL NOT NULL DEFAULT 0,
+    line_total_mark REAL NOT NULL DEFAULT 0,
+    line_total_chase REAL NOT NULL DEFAULT 0,
+    line_total_bs REAL NOT NULL DEFAULT 0,
+    line_total_h REAL NOT NULL DEFAULT 0,
+    line_total_s REAL NOT NULL DEFAULT 0,
+    line_score_rank INTEGER NOT NULL DEFAULT 0,
+    line_win_rate_rank INTEGER NOT NULL DEFAULT 0,
+    line_bs_rank INTEGER NOT NULL DEFAULT 0,
+    line_age_rank INTEGER NOT NULL DEFAULT 0,
+    line_escape_rank INTEGER NOT NULL DEFAULT 0,
+    line_dash_rank INTEGER NOT NULL DEFAULT 0,
+    line_mark_rank INTEGER NOT NULL DEFAULT 0,
+    line_chase_rank INTEGER NOT NULL DEFAULT 0,
+    race_score_rank INTEGER NOT NULL DEFAULT 0,
+    race_win_rate_rank INTEGER NOT NULL DEFAULT 0,
+    race_top2_rank INTEGER NOT NULL DEFAULT 0,
+    race_top3_rank INTEGER NOT NULL DEFAULT 0,
+    race_age_rank INTEGER NOT NULL DEFAULT 0,
+    race_escape_rank INTEGER NOT NULL DEFAULT 0,
+    race_dash_rank INTEGER NOT NULL DEFAULT 0,
+    race_mark_rank INTEGER NOT NULL DEFAULT 0,
+    race_chase_rank INTEGER NOT NULL DEFAULT 0,
+    score_minus_race_avg REAL NOT NULL DEFAULT 0,
+    score_minus_line_avg REAL NOT NULL DEFAULT 0,
+    win_rate_minus_race_avg REAL NOT NULL DEFAULT 0,
+    top3_minus_race_avg REAL NOT NULL DEFAULT 0,
+    bs_minus_race_avg REAL NOT NULL DEFAULT 0,
+    age_minus_race_avg REAL NOT NULL DEFAULT 0,
+    line_position INTEGER NOT NULL DEFAULT 0,
+    line_is_head INTEGER NOT NULL DEFAULT 0,
+    line_is_second INTEGER NOT NULL DEFAULT 0,
+    line_is_last INTEGER NOT NULL DEFAULT 0,
+    leader_score REAL NOT NULL DEFAULT 0,
+    leader_escape REAL NOT NULL DEFAULT 0,
+    leader_dash REAL NOT NULL DEFAULT 0,
+    leader_bs REAL NOT NULL DEFAULT 0,
+    leader_win_rate REAL NOT NULL DEFAULT 0,
+    leader_top3_rate REAL NOT NULL DEFAULT 0,
+    leader_age REAL NOT NULL DEFAULT 0,
+    leader_score_rank INTEGER NOT NULL DEFAULT 0,
+    leader_is_escape_type INTEGER NOT NULL DEFAULT 0,
+    leader_is_dash_type INTEGER NOT NULL DEFAULT 0,
+    is_second INTEGER NOT NULL DEFAULT 0,
+    leader_second_score_gap REAL NOT NULL DEFAULT 0,
+    leader_second_age_gap REAL NOT NULL DEFAULT 0,
+    leader_second_bs_gap REAL NOT NULL DEFAULT 0,
+    leader_second_win_gap REAL NOT NULL DEFAULT 0,
+    style_escape INTEGER NOT NULL DEFAULT 0,
+    style_dash INTEGER NOT NULL DEFAULT 0,
+    style_mark INTEGER NOT NULL DEFAULT 0,
+    style_allround INTEGER NOT NULL DEFAULT 0,
+    age_20s INTEGER NOT NULL DEFAULT 0,
+    age_30s INTEGER NOT NULL DEFAULT 0,
+    age_40s INTEGER NOT NULL DEFAULT 0,
+    age_50plus INTEGER NOT NULL DEFAULT 0,
+    score_under_95 INTEGER NOT NULL DEFAULT 0,
+    score_95_100 INTEGER NOT NULL DEFAULT 0,
+    score_100_105 INTEGER NOT NULL DEFAULT 0,
+    score_105plus INTEGER NOT NULL DEFAULT 0,
+    line_strength REAL NOT NULL DEFAULT 0,
+    line_strength_rank INTEGER NOT NULL DEFAULT 0,
+    is_single_line INTEGER NOT NULL DEFAULT 0,
+    is_two_man_line INTEGER NOT NULL DEFAULT 0,
+    is_three_man_line INTEGER NOT NULL DEFAULT 0,
+    is_four_man_line INTEGER NOT NULL DEFAULT 0,
+    score_gap_top REAL NOT NULL DEFAULT 0,
+    score_gap_second REAL NOT NULL DEFAULT 0,
+    score_gap_line_top REAL NOT NULL DEFAULT 0,
+    age_gap_line_top REAL NOT NULL DEFAULT 0,
+    win_gap_line_top REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT '',
+    UNIQUE (race_id, car_no),
+    FOREIGN KEY (race_id) REFERENCES race_schedule(race_id)
+);
+
+CREATE TABLE IF NOT EXISTS feature_quality_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    table_name TEXT NOT NULL,
+    feature_name TEXT NOT NULL,
+    row_count INTEGER NOT NULL DEFAULT 0,
+    null_count INTEGER NOT NULL DEFAULT 0,
+    min_value REAL NOT NULL DEFAULT 0,
+    max_value REAL NOT NULL DEFAULT 0,
+    avg_value REAL NOT NULL DEFAULT 0,
+    missing_rate REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS feature_importance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_name TEXT NOT NULL,
+    feature_name TEXT NOT NULL,
+    gain REAL NOT NULL DEFAULT 0,
+    split INTEGER NOT NULL DEFAULT 0,
+    permutation_importance REAL NOT NULL DEFAULT 0,
+    shap_importance REAL NOT NULL DEFAULT 0,
+    sample_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT '',
+    UNIQUE (target_name, feature_name)
+);
+
 
 CREATE TABLE IF NOT EXISTS racer_pair_stats (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -301,6 +439,14 @@ CREATE INDEX IF NOT EXISTS idx_racer_pair_stats_sample
     ON racer_pair_stats(races_together);
 CREATE INDEX IF NOT EXISTS idx_race_line_features_date
     ON race_line_features(race_date);
+CREATE INDEX IF NOT EXISTS idx_race_entry_features_date
+    ON race_entry_features(race_date);
+CREATE INDEX IF NOT EXISTS idx_race_entry_features_race
+    ON race_entry_features(race_id, car_no);
+CREATE INDEX IF NOT EXISTS idx_feature_quality_log_table
+    ON feature_quality_log(table_name, created_at);
+CREATE INDEX IF NOT EXISTS idx_feature_importance_target
+    ON feature_importance(target_name, gain);
 CREATE INDEX IF NOT EXISTS idx_race_bet_recommendation_date
     ON race_bet_recommendation(race_date);
 CREATE INDEX IF NOT EXISTS idx_race_prediction_similarity
@@ -376,6 +522,17 @@ def init_db(conn: sqlite3.Connection) -> None:
         "gear_ratio": "REAL",
         "leg_type": "TEXT",
         "score": "REAL",
+        "start_count": "INTEGER",
+        "home_count": "INTEGER",
+        "back_count": "INTEGER",
+        "escape_count": "INTEGER",
+        "makuri_count": "INTEGER",
+        "sashi_count": "INTEGER",
+        "mark_count": "INTEGER",
+        "first_count": "INTEGER",
+        "second_count": "INTEGER",
+        "third_count": "INTEGER",
+        "outside_count": "INTEGER",
         "win_rate": "REAL",
         "quinella_rate": "REAL",
         "trifecta_rate": "REAL",
@@ -591,10 +748,13 @@ def save_schedule(conn: sqlite3.Connection, race: dict, entries: list[dict]) -> 
             INSERT INTO race_entry
                 (
                     race_id, car_no, racer_name, class, prefecture, age, term,
-                    gear_ratio, leg_type, score, win_rate, quinella_rate,
-                    trifecta_rate, comment
+                    gear_ratio, leg_type, score, start_count, home_count,
+                    back_count, escape_count, makuri_count, sashi_count,
+                    mark_count, first_count, second_count, third_count,
+                    outside_count, win_rate, quinella_rate, trifecta_rate,
+                    comment
                 )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -608,6 +768,17 @@ def save_schedule(conn: sqlite3.Connection, race: dict, entries: list[dict]) -> 
                     item.get("gear_ratio"),
                     item.get("leg_type"),
                     item.get("score"),
+                    item.get("start_count"),
+                    item.get("home_count"),
+                    item.get("back_count"),
+                    item.get("escape_count"),
+                    item.get("makuri_count"),
+                    item.get("sashi_count"),
+                    item.get("mark_count"),
+                    item.get("first_count"),
+                    item.get("second_count"),
+                    item.get("third_count"),
+                    item.get("outside_count"),
                     item.get("win_rate"),
                     item.get("quinella_rate"),
                     item.get("trifecta_rate"),

@@ -206,19 +206,32 @@ def extract_entries(html: str) -> list[dict]:
 def extract_entry_rows_from_tables(soup: BeautifulSoup) -> list[dict]:
     entries: list[dict] = []
     for row in soup.select("tr"):
-        cells = [normalize_text(cell.get_text(" ", strip=True)) for cell in row.find_all(["td", "th"])]
+        cell_elements = row.find_all(["td", "th"])
+        cells = [normalize_text(cell.get_text(" ", strip=True)) for cell in cell_elements]
         if len(cells) < 3 or not cells[0].isdigit():
             continue
         racer_link = row.select_one('a[href*="/keirin/cyclist/"]')
         racer_name = normalize_text(racer_link.get_text(" ", strip=True)) if racer_link else None
+        racer_cell_index = None
+        if racer_link:
+            for index, cell in enumerate(cell_elements):
+                if racer_link in cell.select('a[href*="/keirin/cyclist/"]'):
+                    racer_cell_index = index
+                    break
         if not racer_name:
             text_candidates = [cell for cell in cells if re.search(r"[\u4e00-\u9fff]{2,}", cell)]
             racer_name = text_candidates[0] if text_candidates else None
         if not racer_name:
             continue
         meta = parse_entry_meta(" ".join(cells), racer_name)
+        if racer_cell_index is not None:
+            meta.update({
+                key: value
+                for key, value in parse_detailed_entry_cells(cells, racer_cell_index).items()
+                if value is not None
+            })
         entries.append({
-            "car_no": int(cells[0]),
+            "car_no": entry_car_no(cells, racer_cell_index),
             "racer_name": racer_name,
             **meta,
         })
@@ -275,6 +288,65 @@ def parse_entry_meta(text: str, racer_name: str) -> dict:
         "trifecta_rate": rates[2] if len(rates) > 2 else None,
         "comment": None,
     }
+
+
+def parse_detailed_entry_cells(cells: list[str], racer_cell_index: int) -> dict:
+    return {
+        "score": float_at(cells, racer_cell_index + 2),
+        "start_count": int_at(cells, racer_cell_index + 3),
+        "home_count": int_at(cells, racer_cell_index + 4),
+        "back_count": int_at(cells, racer_cell_index + 5),
+        "leg_type": choice_at(cells, racer_cell_index + 6, ["逃", "捲", "差", "追", "両"]),
+        "escape_count": int_at(cells, racer_cell_index + 7),
+        "makuri_count": int_at(cells, racer_cell_index + 8),
+        "sashi_count": int_at(cells, racer_cell_index + 9),
+        "mark_count": int_at(cells, racer_cell_index + 10),
+        "first_count": int_at(cells, racer_cell_index + 11),
+        "second_count": int_at(cells, racer_cell_index + 12),
+        "third_count": int_at(cells, racer_cell_index + 13),
+        "outside_count": int_at(cells, racer_cell_index + 14),
+        "win_rate": float_at(cells, racer_cell_index + 15),
+        "quinella_rate": float_at(cells, racer_cell_index + 16),
+        "trifecta_rate": float_at(cells, racer_cell_index + 17),
+        "gear_ratio": float_at(cells, racer_cell_index + 18),
+        "comment": text_at(cells, racer_cell_index + 19),
+    }
+
+
+def entry_car_no(cells: list[str], racer_cell_index: int | None) -> int:
+    if racer_cell_index and racer_cell_index > 0 and cells[racer_cell_index - 1].isdigit():
+        return int(cells[racer_cell_index - 1])
+    return int(cells[0])
+
+
+def int_at(items: list[str], index: int) -> int | None:
+    if index < 0 or index >= len(items):
+        return None
+    text = items[index].replace(",", "")
+    if re.fullmatch(r"\d+", text):
+        return int(text)
+    return None
+
+
+def float_at(items: list[str], index: int) -> float | None:
+    if index < 0 or index >= len(items):
+        return None
+    text = items[index].replace(",", "")
+    if re.fullmatch(r"\d+(?:\.\d+)?", text):
+        return float(text)
+    return None
+
+
+def text_at(items: list[str], index: int) -> str | None:
+    if index < 0 or index >= len(items):
+        return None
+    return items[index] or None
+
+
+def choice_at(items: list[str], index: int, choices: list[str]) -> str | None:
+    if index < 0 or index >= len(items):
+        return None
+    return first_choice(items[index], choices)
 
 
 def first_float_after_labels(text: str, labels: list[str]) -> float | None:

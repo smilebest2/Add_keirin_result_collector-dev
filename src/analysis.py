@@ -527,6 +527,74 @@ def page(title: str, active: str, body: str) -> str:
       color: var(--muted);
       font-size: 13px;
     }}
+    .decision-grid {{
+      display: grid;
+      grid-template-columns: repeat(4, minmax(150px, 1fr));
+      gap: 10px;
+      padding: 14px 15px 0;
+    }}
+    .decision-card {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fbfcfd;
+    }}
+    .decision-card span {{
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }}
+    .decision-card strong {{
+      display: block;
+      margin-top: 4px;
+      font-size: 22px;
+      line-height: 1.15;
+    }}
+    .decision-card small {{
+      display: block;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12px;
+    }}
+    .pill.buy {{
+      background: #dcfce7;
+      color: #166534;
+    }}
+    .pill.caution {{
+      background: #fef3c7;
+      color: #92400e;
+    }}
+    .result-focus {{
+      display: grid;
+      grid-template-columns: repeat(3, minmax(180px, 1fr));
+      gap: 10px;
+      padding: 14px 15px 0;
+    }}
+    .result-focus .decision-card {{
+      background: #ffffff;
+    }}
+    .result-focus .hit strong {{
+      color: #166534;
+    }}
+    .result-focus .return strong {{
+      color: var(--accent);
+    }}
+    .result-focus .miss strong {{
+      color: #991b1b;
+    }}
+    .analysis-fold {{
+      margin-top: 16px;
+    }}
+    .analysis-fold > summary {{
+      cursor: pointer;
+      padding: 13px 15px;
+      color: var(--accent);
+      font-weight: 800;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfd;
+    }}
     tr.sample-low td {{
       opacity: 0.48;
       background: #f8fafc;
@@ -827,6 +895,8 @@ def page(title: str, active: str, body: str) -> str:
       table {{ min-width: 760px; }}
       .bar-row {{ grid-template-columns: 96px minmax(130px, 1fr) 74px; }}
       .filters {{ grid-template-columns: repeat(2, minmax(120px, 1fr)); }}
+      .decision-grid {{ grid-template-columns: repeat(2, minmax(120px, 1fr)); }}
+      .result-focus {{ grid-template-columns: 1fr; }}
       .prediction-type-grid {{ grid-template-columns: 1fr; }}
       .analysis-metrics {{ grid-template-columns: repeat(2, minmax(120px, 1fr)); }}
       .analysis-panels {{ grid-template-columns: 1fr; }}
@@ -3428,6 +3498,18 @@ def chaos_display(features: dict) -> str:
     reason_text = "、".join(str(item) for item in reasons[:3])
     return f"{score_text} / {level}" + (f" / {reason_text}" if reason_text else "")
 
+
+def recommendation_decision(row: dict, features: dict) -> tuple[str, str]:
+    bet_type = row.get("recommended_bet_type") or "見送り"
+    confidence = row.get("confidence") or "C"
+    chaos = features.get("chaos_level") or ""
+    if bet_type != "見送り" and confidence in {"A", "B"} and chaos != "high":
+        return "buy", "買い候補"
+    if bet_type != "見送り":
+        return "caution", "慎重"
+    return "skip", "見送り"
+
+
 def bet_recommendation_rows_for_date(conn, target_date: str | None) -> list[dict]:
     if not target_date:
         return []
@@ -3449,9 +3531,16 @@ def bet_recommendation_rows_for_date(conn, target_date: str | None) -> list[dict
         except (TypeError, ValueError, json.JSONDecodeError):
             combinations = []
         features = parse_feature_json(row.get("feature_json"))
+        decision_key, decision_label = recommendation_decision(row, features)
+        chaos = features.get("chaos_level") or ""
         result.append({
             **row,
             "race": f'{row.get("venue") or ""} {row.get("race_no") or ""}R',
+            "decision": decision_label,
+            "decision_display": pill(
+                decision_label,
+                "buy" if decision_key == "buy" else "caution" if decision_key == "caution" else "low",
+            ),
             "chaos_display": chaos_display(features),
             "recommended_bet_type": (
                 f'<span class="pill">{h(row.get("recommended_bet_type") or "見送り")}</span>'
@@ -3466,6 +3555,13 @@ def bet_recommendation_rows_for_date(conn, target_date: str | None) -> list[dict
                 else "参考データ不足"
             ),
             "classification_reason": row.get("reason_text") or row.get("skip_reason") or "-",
+            "_data": {
+                "decision": decision_key,
+                "venue": row.get("venue") or "",
+                "bet": row.get("recommended_bet_type") or "見送り",
+                "confidence": row.get("confidence") or "C",
+                "chaos": chaos,
+            },
         })
     return result
 
@@ -3493,6 +3589,77 @@ def render_predictions(conn) -> str:
       <div class="card"><span>生成日時</span><strong>{h(latest_created or "-")}</strong></div>
     </div>
     """
+    recommendation_rows = bet_recommendation_rows_for_date(conn, target_date)
+    if recommendation_rows:
+        buy_count = sum(1 for row in recommendation_rows if row.get("_data", {}).get("decision") == "buy")
+        caution_count = sum(1 for row in recommendation_rows if row.get("_data", {}).get("decision") == "caution")
+        skip_count = sum(1 for row in recommendation_rows if row.get("_data", {}).get("decision") == "skip")
+        high_chaos_count = sum(1 for row in recommendation_rows if row.get("_data", {}).get("chaos") == "high")
+        recommendation_venues = sorted({row.get("_data", {}).get("venue") for row in recommendation_rows if row.get("_data", {}).get("venue")})
+        recommendation_bets = sorted({row.get("_data", {}).get("bet") for row in recommendation_rows if row.get("_data", {}).get("bet")})
+        body += section(
+            "本日の買い候補",
+            f"""
+              <div class="decision-grid">
+                <div class="decision-card"><span>買い候補</span><strong>{h(number(buy_count))}</strong><small>A/B評価かつ高荒れ以外</small></div>
+                <div class="decision-card"><span>慎重</span><strong>{h(number(caution_count))}</strong><small>買い目ありだが条件注意</small></div>
+                <div class="decision-card"><span>見送り</span><strong>{h(number(skip_count))}</strong><small>基準未満・材料不足</small></div>
+                <div class="decision-card"><span>荒れ度 high</span><strong>{h(number(high_chaos_count))}</strong><small>波乱警戒のレース</small></div>
+              </div>
+              <div class="filters" id="recommendation-filters">
+                <label>判定<select id="recommendation-filter-decision"><option value="">すべて</option><option value="buy">買い候補</option><option value="caution">慎重</option><option value="skip">見送り</option></select></label>
+                <label>会場<select id="recommendation-filter-venue"><option value="">すべて</option>{''.join(f'<option value="{h(venue)}">{h(venue)}</option>' for venue in recommendation_venues)}</select></label>
+                <label>券種<select id="recommendation-filter-bet"><option value="">すべて</option>{''.join(f'<option value="{h(bet)}">{h(bet)}</option>' for bet in recommendation_bets)}</select></label>
+                <label>荒れ度<select id="recommendation-filter-chaos"><option value="">すべて</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label>
+              </div>
+              {rich_table(
+                  [
+                      "判定",
+                      "レース",
+                      "発走",
+                      "推奨券種",
+                      "買い目",
+                      "確信度",
+                      "荒れ度",
+                      "理由",
+                  ],
+                  recommendation_rows,
+                  [
+                      "decision_display",
+                      "race",
+                      "start_time",
+                      "recommended_bet_type",
+                      "buy",
+                      "confidence_display",
+                      "chaos_display",
+                      "classification_reason",
+                  ],
+              ).replace("<table>", '<table id="daily-recommendations">', 1)}
+              <script>
+              (() => {{
+                const table = document.getElementById("daily-recommendations");
+                if (!table) return;
+                const decision = document.getElementById("recommendation-filter-decision");
+                const venue = document.getElementById("recommendation-filter-venue");
+                const bet = document.getElementById("recommendation-filter-bet");
+                const chaos = document.getElementById("recommendation-filter-chaos");
+                const rows = Array.from(table.querySelectorAll("tbody tr"));
+                const apply = () => {{
+                  rows.forEach((row) => {{
+                    const show =
+                      (!decision.value || row.dataset.decision === decision.value) &&
+                      (!venue.value || row.dataset.venue === venue.value) &&
+                      (!bet.value || row.dataset.bet === bet.value) &&
+                      (!chaos.value || row.dataset.chaos === chaos.value);
+                    row.hidden = !show;
+                  }});
+                }};
+                [decision, venue, bet, chaos].forEach((item) => item.addEventListener("change", apply));
+              }})();
+              </script>
+            """,
+            "最初に見る判断表です。買い候補だけに絞ってから、荒れ度と理由を確認してください。",
+        )
     body += section("サマリー", table(
         ["予想タイプ", "件数", "平均スコア"],
         sorted(
@@ -3501,36 +3668,6 @@ def render_predictions(conn) -> str:
         ),
         ["prediction_type", "predictions", "avg_score"],
     ), "対象日の予想件数と平均スコアです。おすすめだけでなく、当日全レース予想も下に表示します。")
-
-    recommendation_rows = bet_recommendation_rows_for_date(conn, target_date)
-    if recommendation_rows:
-        body += section(
-            "レース別 推奨券種",
-            rich_table(
-                [
-                    "レース",
-                    "発走",
-                    "推奨券種",
-                    "買い目",
-                    "確信度",
-                    "類似レース実績",
-                    "荒れ度",
-                    "分類根拠・見送り理由",
-                ],
-                recommendation_rows,
-                [
-                    "race",
-                    "start_time",
-                    "recommended_bet_type",
-                    "buy",
-                    "confidence_display",
-                    "similar_result",
-                    "chaos_display",
-                    "classification_reason",
-                ],
-            ),
-            "予想時点オッズは使用せず、モデル評価差、直近成績、競走得点、正常なライン構成、過去類似レース成績から相対的に当てやすい券種を選びます。全券種が基準未満なら見送りです。",
-        )
 
     featured_rows = featured_prediction_rows(prediction_rows)
     if featured_rows:
@@ -3597,18 +3734,21 @@ def render_predictions(conn) -> str:
                 cells[prediction_type] = prediction_pick_cell(group["predictions"].get(prediction_type))
             all_rows.append(cells)
 
-        body += section("当日全レース予想", f"""
-          <div class="filters" id="prediction-filters">
-            <label>会場<select id="prediction-filter-venue"><option value="">すべて</option>{venue_options}</select></label>
-            <label>信頼度<select id="prediction-filter-confidence"><option value="">すべて</option><option value="A">A</option><option value="B">B</option><option value="C">C</option></select></label>
-            <label>予想タイプ<select id="prediction-filter-type"><option value="">すべて</option>{''.join(f'<option value="{h(item)}">{h(item)}</option>' for item in PREDICTION_TYPE_ORDER)}</select></label>
-            <label>重複買い目<select id="prediction-filter-duplicate"><option value="">すべて</option><option value="yes">あり</option><option value="no">なし</option></select></label>
-          </div>
-          {rich_table(
-              ["レース", "発走", "並び", *PREDICTION_TYPE_ORDER, "重複"],
-              all_rows,
-              ["race", "start_time", "lineup_text", *PREDICTION_TYPE_ORDER, "duplicate"],
-          ).replace("<table>", '<table id="all-race-predictions">', 1)}
+        body += section("全レース予想（詳細）", f"""
+          <details class="analysis-fold">
+            <summary>5タイプの買い目を横並びで確認する</summary>
+            <div class="filters" id="prediction-filters">
+              <label>会場<select id="prediction-filter-venue"><option value="">すべて</option>{venue_options}</select></label>
+              <label>信頼度<select id="prediction-filter-confidence"><option value="">すべて</option><option value="A">A</option><option value="B">B</option><option value="C">C</option></select></label>
+              <label>予想タイプ<select id="prediction-filter-type"><option value="">すべて</option>{''.join(f'<option value="{h(item)}">{h(item)}</option>' for item in PREDICTION_TYPE_ORDER)}</select></label>
+              <label>重複買い目<select id="prediction-filter-duplicate"><option value="">すべて</option><option value="yes">あり</option><option value="no">なし</option></select></label>
+            </div>
+            {rich_table(
+                ["レース", "発走", "並び", *PREDICTION_TYPE_ORDER, "重複"],
+                all_rows,
+                ["race", "start_time", "lineup_text", *PREDICTION_TYPE_ORDER, "duplicate"],
+            ).replace("<table>", '<table id="all-race-predictions">', 1)}
+          </details>
           <script>
           (() => {{
             const table = document.getElementById("all-race-predictions");
@@ -3631,7 +3771,7 @@ def render_predictions(conn) -> str:
             [venue, confidence, type, duplicate].forEach((item) => item.addEventListener("change", apply));
           }})();
           </script>
-        """, "会場・R順で、各レースの5タイプの買い目を横並びで比較できます。")
+        """, "会場・R順で、各レースの5タイプの買い目を横並びで比較できます。通常は上の本日の買い候補を優先してください。")
 
     type_notes = "".join(
         f'<div class="prediction-type-note"><strong>{h(prediction_type.replace("予想", ""))}</strong><span>{h(summary)}</span></div>'
@@ -3863,7 +4003,7 @@ def render_prediction_results(conn) -> str:
             "roi": pct(row["roi"]),
             "_class": "sample-low" if row["sample_kind"] == "reference" else "",
         })
-    body += section("日別 的中率・回収率推移", f"""
+    trend_section = section("日別 的中率・回収率推移", f"""
       <div class="grid two">
         {section("完全的中率", bar_chart(daily_trend, "race_date", "exact_rate", pct, 30))}
         {section("1着的中率", bar_chart(daily_trend, "race_date", "first_rate", pct, 30))}
@@ -3887,7 +4027,7 @@ def render_prediction_results(conn) -> str:
         }
         for row in bet_type_total
     ]
-    body += section("累積 live 賭式別成績", table(
+    bet_total_section = section("累積 live 賭式別成績", table(
         ["賭式", "買い目数", "的中", "的中率", "投資額", "払戻額", "回収率"],
         bet_total_display,
         ["bet_type", "tickets", "hits", "hit_rate", "stake_total", "return_total", "roi"],
@@ -3906,17 +4046,69 @@ def render_prediction_results(conn) -> str:
         }
         for row in bet_type_daily
     ]
-    body += section("日別 賭式別成績", table(
+    bet_daily_section = section("日別 賭式別成績", table(
         ["日付", "賭式", "買い目数", "的中", "的中率", "投資額", "払戻額", "回収率"],
         bet_daily_display,
         ["race_date", "bet_type", "tickets", "hits", "hit_rate", "stake_total", "return_total", "roi"],
     ))
 
+    exact_hit_count = sum(1 for row in result_rows if row.get("hit_exact"))
+    return_hit_count = sum(1 for row in result_rows if int(row.get("return_amount") or 0) > 0)
+    first_miss_count = sum(1 for row in result_rows if not row.get("hit_1st"))
+    body += f"""
+    <div class="result-focus">
+      <div class="decision-card hit"><span>完全的中</span><strong>{h(number(exact_hit_count))}</strong><small>順位まで一致した予想</small></div>
+      <div class="decision-card return"><span>回収あり</span><strong>{h(number(return_hit_count))}</strong><small>払戻が発生した予想</small></div>
+      <div class="decision-card miss"><span>1着不一致</span><strong>{h(number(first_miss_count))}</strong><small>軸候補の見直し対象</small></div>
+    </div>
+    """
+
+    focus_rows = []
+    for row in sorted(result_rows, key=lambda item: int(item.get("return_amount") or 0), reverse=True):
+        if int(row.get("return_amount") or 0) <= 0:
+            continue
+        race_label = f'{row.get("venue") or ""} {row.get("race_no") or ""}R'
+        focus_rows.append({
+            "focus": pill("回収あり", "buy"),
+            "race": race_detail_link(row.get("race_id"), race_label),
+            "prediction_type": row.get("prediction_type"),
+            "predicted": prediction_combo(row),
+            "actual": actual_combo(row),
+            "judgment": f'<span class="{"hit" if row.get("hit_exact") else "miss"}">{h(prediction_result_label(row))}</span>',
+            "return_amount": yen(row.get("return_amount")),
+            "roi": pct(row.get("roi")),
+        })
+        if len(focus_rows) >= 5:
+            break
+    for row in result_rows:
+        if row.get("hit_exact") or not row.get("hit_1st"):
+            continue
+        race_label = f'{row.get("venue") or ""} {row.get("race_no") or ""}R'
+        focus_rows.append({
+            "focus": pill("惜しい", "caution"),
+            "race": race_detail_link(row.get("race_id"), race_label),
+            "prediction_type": row.get("prediction_type"),
+            "predicted": prediction_combo(row),
+            "actual": actual_combo(row),
+            "judgment": f'<span class="miss">{h(prediction_result_label(row))}</span>',
+            "return_amount": yen(row.get("return_amount")),
+            "roi": pct(row.get("roi")),
+        })
+        if len(focus_rows) >= 10:
+            break
+    body += section("当日の要点", rich_table(
+        ["分類", "レース", "予想タイプ", "予想", "結果", "判定", "回収額", "回収率"],
+        focus_rows,
+        ["focus", "race", "prediction_type", "predicted", "actual", "judgment", "return_amount", "roi"],
+        "当日の回収あり・惜しい予想はありません。",
+    ), "回収が出た予想と、1着は取れて順位が崩れた予想を先に確認できます。")
+
     featured_display = []
     for row in featured_prediction_rows(result_rows):
+        race_label = f'{row.get("venue") or ""} {row.get("race_no") or ""}R'
         featured_display.append({
             "prediction_type": row.get("prediction_type"),
-            "race": f'{row.get("venue") or ""} {row.get("race_no") or ""}R',
+            "race": race_detail_link(row.get("race_id"), race_label),
             "start_time": row.get("start_time"),
             "predicted": prediction_combo(row),
             "actual": actual_combo(row),
@@ -3975,9 +4167,10 @@ def render_prediction_results(conn) -> str:
         has_return = any(int(item.get("return_amount") or 0) > 0 for item in predictions.values())
         if group["race_date"] == latest_result_date:
             duplicate_groups["あり" if duplicate else "なし"].extend(predictions.values())
+        race_label = f'{group["venue"]} {group["race_no"]}R'
         cells = {
             "race_date": group["race_date"],
-            "race": f'{group["venue"]} {group["race_no"]}R',
+            "race": race_detail_link(group["race_id"], race_label),
             "start_time": group["start_time"],
             "actual": group["actual"],
             "lineup_text": group["lineup_text"],
@@ -4042,12 +4235,12 @@ def render_prediction_results(conn) -> str:
       </script>
     """, "日付を切り替え、会場・R順で各レースの結果と5タイプの買い目を横並びで比較できます。")
 
-    body += section("日別 予想タイプ別成績", table(
+    daily_type_section = section("日別 予想タイプ別成績", table(
         ["予想タイプ", "予想数", "完全的中", "完全的中率", "1着的中率", "3着内一致平均", "投資額", "払戻額", "回収率"],
         format_stats(daily_rows),
         ["prediction_type", "predictions", "exact_hits", "exact_rate", "first_rate", "avg_top3_count", "stake_total", "return_total", "roi"],
     ))
-    body += section("累積 live 予想タイプ別成績", table(
+    total_type_section = section("累積 live 予想タイプ別成績", table(
         ["予想タイプ", "予想数", "完全的中", "完全的中率", "1着的中率", "3着内一致平均", "投資額", "払戻額", "回収率"],
         format_stats(total),
         ["prediction_type", "predictions", "exact_hits", "exact_rate", "first_rate", "avg_top3_count", "stake_total", "return_total", "roi"],
@@ -4071,7 +4264,7 @@ def render_prediction_results(conn) -> str:
             ),
         )
     ]
-    body += section("累積 live 予想タイプ×賭式別成績", table(
+    type_bet_section = section("累積 live 予想タイプ×賭式別成績", table(
         ["予想タイプ", "賭式", "買い目数", "的中", "的中率", "投資額", "払戻額", "回収率"],
         type_bet_display,
         ["prediction_type", "bet_type", "tickets", "hits", "hit_rate", "stake_total", "return_total", "roi"],
@@ -4101,18 +4294,31 @@ def render_prediction_results(conn) -> str:
         for label, items in duplicate_groups.items()
         if items
     ]
-    body += '<div class="grid two">'
-    body += section("信頼度別成績", table(
+    confidence_grid_section = '<div class="grid two">'
+    confidence_grid_section += section("信頼度別成績", table(
         ["信頼度", "予想数", "完全的中率", "1着的中率", "3着内一致平均", "投資額", "払戻額", "回収率"],
         confidence_groups,
         ["group", "predictions", "exact_rate", "first_rate", "avg_top3_count", "stake_total", "return_total", "roi"],
     ))
-    body += section("重複買い目別成績", table(
+    confidence_grid_section += section("重複買い目別成績", table(
         ["重複買い目", "予想数", "完全的中率", "1着的中率", "3着内一致平均", "投資額", "払戻額", "回収率"],
         duplicate_rows,
         ["group", "predictions", "exact_rate", "first_rate", "avg_top3_count", "stake_total", "return_total", "roi"],
     ))
-    body += "</div>"
+    confidence_grid_section += "</div>"
+
+    body += f"""
+    <details class="analysis-fold">
+      <summary>成績分析を開く</summary>
+      {daily_type_section}
+      {confidence_grid_section}
+      {trend_section}
+      {bet_total_section}
+      {bet_daily_section}
+      {total_type_section}
+      {type_bet_section}
+    </details>
+    """
 
     if is_dev_environment():
         component_detail_rows = component_result_analysis_rows(result_rows)
@@ -4161,9 +4367,10 @@ def render_prediction_results(conn) -> str:
     details = []
     for row in historical_rows:
         sample_kind = row.get("sample_kind") or "live"
+        race_label = f'{row.get("race_date") or ""} {row.get("venue") or ""} {row.get("race_no") or ""}R'
         details.append({
             "prediction_type": row["prediction_type"],
-            "race": f'{row.get("race_date") or ""} {row.get("venue") or ""} {row.get("race_no") or ""}R',
+            "race": race_detail_link(row.get("race_id"), race_label),
             "sample_kind": sample_kind_labels.get(sample_kind, sample_kind),
             "predicted": prediction_combo(row),
             "actual": actual_combo(row),
@@ -4179,7 +4386,7 @@ def render_prediction_results(conn) -> str:
         })
     result_dates = sorted({row.get("race_date") for row in historical_rows if row.get("race_date")}, reverse=True)
     date_options = "".join(f'<option value="{h(item)}">{h(item)}</option>' for item in result_dates)
-    body += section("予想結果 明細", f"""
+    history_section = section("予想結果 明細", f"""
       <div class="filters">
         <label>対象日
           <select id="history-result-date">
@@ -4206,6 +4413,12 @@ def render_prediction_results(conn) -> str:
       }})();
       </script>
     """, "日付を選ぶと、その日の全予想と5賭式の判定を確認できます。")
+    body += f"""
+    <details class="analysis-fold">
+      <summary>過去明細を開く</summary>
+      {history_section}
+    </details>
+    """
     return page("予想結果", "prediction-results", body)
 
 

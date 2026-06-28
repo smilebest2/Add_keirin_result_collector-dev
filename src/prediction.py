@@ -1,4 +1,5 @@
 import argparse
+from itertools import permutations
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -11,7 +12,7 @@ from .pair_stats import pair_context_for_entries, refresh_racer_pair_stats
 JST = timezone(timedelta(hours=9))
 TRIFECTA = "3連単"
 STAKE_AMOUNT = 100
-MODEL_VERSION = "explainable-v5"
+MODEL_VERSION = "explainable-v6"
 BET_TYPES = ["2車複", "2車単", "ワイド", "3連複", "3連単"]
 RECOMMENDATION_MODEL_VERSION = "bet-fit-v3"
 
@@ -28,6 +29,15 @@ TYPE_ANA = PREDICTION_TYPES[1]
 TYPE_HETEOJI = PREDICTION_TYPES[2]
 TYPE_KODO = PREDICTION_TYPES[3]
 TYPE_KANJO = PREDICTION_TYPES[4]
+TYPE_FEATURE_3RENTAN = "feature_3rentan"
+TYPE_FEATURE_BOX_3RENTAN = "feature_box_3rentan"
+TYPE_FEATURE_LINE_MIX = "feature_line_mix"
+FEATURE_PREDICTION_TYPES = [
+    TYPE_FEATURE_3RENTAN,
+    TYPE_FEATURE_BOX_3RENTAN,
+    TYPE_FEATURE_LINE_MIX,
+]
+ALL_PREDICTION_TYPES = [*PREDICTION_TYPES, *FEATURE_PREDICTION_TYPES]
 
 
 def is_dev_environment() -> bool:
@@ -230,6 +240,113 @@ def lineup_position(conn, race_id: str, car_no: int) -> int | None:
     return lineup_positions(conn, race_id).get(int(car_no))
 
 
+def entry_feature_rows(conn, race_id: str) -> dict[int, dict]:
+    return {
+        int(row["car_no"]): row
+        for row in rows(
+            conn,
+            """
+            SELECT *
+            FROM race_entry_features
+            WHERE race_id = ?
+            """,
+            (race_id,),
+        )
+    }
+
+
+def feature_prediction_score(feature: dict | None) -> float:
+    if not feature:
+        return 0.0
+    return (
+        safe_float(feature.get("score_minus_race_avg")) * 1.5
+        + safe_float(feature.get("top3_minus_race_avg")) * 1.2
+        + safe_float(feature.get("win_rate_minus_race_avg")) * 1.0
+        - safe_float(feature.get("race_score_rank")) * 0.8
+        - safe_float(feature.get("race_top3_rank")) * 0.6
+        - safe_float(feature.get("line_strength_rank")) * 0.7
+        - safe_float(feature.get("score_gap_top")) * 0.5
+        - safe_float(feature.get("score_gap_second")) * 0.3
+    )
+
+
+def safe_float(value, default: float = 0.0) -> float:
+    if value is None:
+        return default
+    return float(value)
+
+
+def normalized_component(value, center: float, scale: float, weight: float) -> float:
+    if value is None:
+        return 0.0
+    normalized = (float(value) - center) / scale
+    normalized = max(-5.0, min(5.0, normalized))
+    return normalized * weight
+
+
+def entry_tactic_features(entry: dict) -> dict:
+    result_counts = [
+        entry.get("first_count"),
+        entry.get("second_count"),
+        entry.get("third_count"),
+        entry.get("outside_count"),
+    ]
+    if all(value is None for value in result_counts):
+        return {
+            "front_rate": None,
+            "finish_index": None,
+            "place_rate": None,
+            "activity": None,
+        }
+
+    first = safe_float(entry.get("first_count"))
+    second = safe_float(entry.get("second_count"))
+    third = safe_float(entry.get("third_count"))
+    outside = safe_float(entry.get("outside_count"))
+    starts = max(1.0, first + second + third + outside)
+
+    return {
+        "front_rate": (safe_float(entry.get("escape_count")) + safe_float(entry.get("makuri_count"))) / starts * 100.0,
+        "finish_index": (first * 3.0 + second * 1.5 + third * 0.6 - outside * 0.25) / starts,
+        "place_rate": (first + second + third) / starts * 100.0,
+        "activity": (
+            safe_float(entry.get("start_count"))
+            + safe_float(entry.get("home_count"))
+            + safe_float(entry.get("back_count"))
+        ),
+    }
+
+
+def entry_role_fit(entry: dict, line_pos: int | None) -> dict[str, float]:
+    tactic = entry_tactic_features(entry)
+    axis = (
+        normalized_component(entry.get("score"), 49.5, 2.2, 5.0)
+        + normalized_component(entry.get("win_rate"), 18.0, 10.0, 2.2)
+        + normalized_component(entry.get("quinella_rate"), 36.0, 14.0, 1.2)
+        + normalized_component(tactic["finish_index"], 1.0, 0.9, 1.7)
+    )
+    place = (
+        normalized_component(entry.get("score"), 49.5, 2.2, 3.2)
+        + normalized_component(entry.get("trifecta_rate"), 55.0, 16.0, 2.6)
+        + normalized_component(tactic["place_rate"], 55.0, 16.0, 1.4)
+        + normalized_component(tactic["finish_index"], 1.0, 0.9, 1.3)
+    )
+    front_fit = 0.0
+    if line_pos == 1:
+        front_fit += normalized_component(tactic["front_rate"], 30.0, 18.0, 1.3)
+        front_fit += normalized_component(tactic["activity"], 5.0, 4.0, 0.8)
+    elif line_pos == 2:
+        front_fit += normalized_component(entry.get("quinella_rate"), 36.0, 14.0, 1.1)
+        front_fit += normalized_component(entry.get("mark_count"), 3.0, 3.0, 0.7)
+
+    return {
+        "axis": axis,
+        "place": place,
+        "front_fit": front_fit,
+        "base": axis * 1.4 + place * 0.6 + front_fit,
+    }
+
+
 def entry_scores(conn, race: dict, target_date: str) -> list[dict]:
     entries = rows(
         conn,
@@ -244,7 +361,10 @@ def entry_scores(conn, race: dict, target_date: str) -> list[dict]:
     scored = []
     positions = lineup_positions(conn, race["race_id"])
     pair_context = pair_context_for_entries(conn, entries)
+    feature_rows = entry_feature_rows(conn, race["race_id"])
     for entry in entries:
+        feature = feature_rows.get(int(entry["car_no"]), {})
+        feature_score = feature_prediction_score(feature)
         history = racer_history(conn, entry, race.get("venue"), target_date)
         context = car_context(conn, race, entry["car_no"], target_date)
         line_pos = positions.get(int(entry["car_no"]))
@@ -277,6 +397,7 @@ def entry_scores(conn, race: dict, target_date: str) -> list[dict]:
         pair_ahead_component = ((pair_ahead_rate or 50) - 50) * 0.08 * pair_weight
         pair_top2_component = ((pair_top2_rate or 0) - 25) * 0.06 * pair_weight
         pair_top3_component = ((pair_top3_rate or 0) - 40) * 0.05 * pair_weight
+        role_fit = entry_role_fit(entry, line_pos)
         score_components = {
             "直近": recent_component,
             "出走表勝率": entry_win_component,
@@ -293,6 +414,7 @@ def entry_scores(conn, race: dict, target_date: str) -> list[dict]:
             "pair連対": pair_top2_component,
             "pair3着内": pair_top3_component,
         }
+        score_components["new_data_role_fit"] = role_fit["base"]
         score_value = sum(score_components.values())
         win_score = (
             score_value
@@ -300,6 +422,8 @@ def entry_scores(conn, race: dict, target_date: str) -> list[dict]:
             + entry_win_component * 1.20
             + history_win_component * 0.90
             + pair_ahead_component * 1.40
+            + role_fit["axis"] * 2.00
+            + role_fit["front_fit"]
         )
         top2_score = (
             score_value
@@ -307,6 +431,8 @@ def entry_scores(conn, race: dict, target_date: str) -> list[dict]:
             + history_top2_component * 0.70
             + pair_top2_component * 1.70
             + pair_ahead_component * 0.70
+            + role_fit["place"] * 1.30
+            + role_fit["front_fit"] * 0.50
         )
         top3_score = (
             score_value
@@ -314,6 +440,7 @@ def entry_scores(conn, race: dict, target_date: str) -> list[dict]:
             + history_top3_component * 0.70
             + pair_top3_component * 1.80
             + line_bonus * 0.50
+            + role_fit["place"] * 1.50
         )
         scored.append({
             **entry,
@@ -329,10 +456,16 @@ def entry_scores(conn, race: dict, target_date: str) -> list[dict]:
             "pair_top3_rate": pair_top3_rate,
             "pair_rank_sum": pair.get("pair_rank_sum"),
             "line_position": line_pos,
+            "entry_feature": feature,
+            "feature_available": 1 if feature else 0,
+            "feature_score": round(feature_score, 3),
             "base_score": round(score_value, 3),
             "win_score": round(win_score, 3),
             "top2_score": round(top2_score, 3),
             "top3_score": round(top3_score, 3),
+            "new_data_axis_score": round(role_fit["axis"], 3),
+            "new_data_place_score": round(role_fit["place"], 3),
+            "new_data_role_fit": round(role_fit["base"], 3),
             "score_components": {key: round(value, 3) for key, value in score_components.items()},
         })
     return scored
@@ -427,6 +560,9 @@ def score_detail(prediction_type: str, row: dict) -> dict:
             "win_score": round(metric(row, "win_score"), 1),
             "top2_score": round(metric(row, "top2_score"), 1),
             "top3_score": round(metric(row, "top3_score"), 1),
+            "new_data_axis_score": round(metric(row, "new_data_axis_score"), 1),
+            "new_data_place_score": round(metric(row, "new_data_place_score"), 1),
+            "new_data_role_fit": round(metric(row, "new_data_role_fit"), 1),
             "pair_races": int(row.get("pair_races") or 0),
             "pair_ahead_rate": round(metric(row, "pair_ahead_rate"), 1),
             "pair_top3_rate": round(metric(row, "pair_top3_rate"), 1),
@@ -477,7 +613,97 @@ def take_unique(*groups: list[dict]) -> list[dict]:
     return picked
 
 
+def feature_ranked(scored: list[dict]) -> list[dict]:
+    return sorted(
+        [row for row in scored if row.get("feature_available")],
+        key=lambda row: (
+            metric(row, "feature_score"),
+            metric(row, "top3_score"),
+            metric(row, "base_score"),
+            -int(row["car_no"]),
+        ),
+        reverse=True,
+    )
+
+
+def feature_reason(prediction_type: str) -> str:
+    if prediction_type == TYPE_FEATURE_BOX_3RENTAN:
+        return "race_entry_features の feature_score 上位3名を3連単BOX候補として評価。既存予想とは別モード。"
+    if prediction_type == TYPE_FEATURE_LINE_MIX:
+        return "feature_score 1位を軸に、番手補正とライン強度補正を加えて2着・3着候補を選定。既存予想とは別モード。"
+    return "race_entry_features の feature_score 上位3名を1着・2着・3着順に選定。既存予想とは別モード。"
+
+
+def feature_detail_json(prediction_type: str, picked: list[dict]) -> str:
+    details = []
+    for row in picked:
+        feature = row.get("entry_feature") or {}
+        details.append({
+            "car_no": int(row["car_no"]),
+            "racer_name": row.get("racer_name") or "",
+            "feature_score": round(metric(row, "feature_score"), 3),
+            "score_minus_race_avg": round(safe_float(feature.get("score_minus_race_avg")), 3),
+            "top3_minus_race_avg": round(safe_float(feature.get("top3_minus_race_avg")), 3),
+            "win_rate_minus_race_avg": round(safe_float(feature.get("win_rate_minus_race_avg")), 3),
+            "race_score_rank": int(safe_float(feature.get("race_score_rank"))),
+            "race_top3_rank": int(safe_float(feature.get("race_top3_rank"))),
+            "line_strength_rank": int(safe_float(feature.get("line_strength_rank"))),
+            "score_gap_top": round(safe_float(feature.get("score_gap_top")), 3),
+            "score_gap_second": round(safe_float(feature.get("score_gap_second")), 3),
+            "line_position": int(safe_float(feature.get("line_position"))),
+            "line_strength": round(safe_float(feature.get("line_strength")), 3),
+        })
+    return json.dumps({"prediction_type": prediction_type, "details": details}, ensure_ascii=False)
+
+
+def pick_feature_combo(prediction_type: str, scored: list[dict]) -> tuple[list[int], float, str, str, str]:
+    ranked = feature_ranked(scored)
+    if len(ranked) < 3:
+        return [], 0, "race_entry_features が不足しているため新特徴量予想を作成しません。", "", ""
+
+    if prediction_type in {TYPE_FEATURE_3RENTAN, TYPE_FEATURE_BOX_3RENTAN}:
+        picked = ranked[:3]
+    else:
+        first = ranked[0]
+        rest = [row for row in ranked if int(row["car_no"]) != int(first["car_no"])]
+        second = max(
+            rest,
+            key=lambda row: (
+                metric(row, "feature_score")
+                + safe_float((row.get("entry_feature") or {}).get("is_second")) * 8.0
+                + safe_float((row.get("entry_feature") or {}).get("leader_second_win_gap")) * 0.15,
+                metric(row, "top3_score"),
+                -int(row["car_no"]),
+            ),
+        )
+        rest = [row for row in rest if int(row["car_no"]) != int(second["car_no"])]
+        third = max(
+            rest,
+            key=lambda row: (
+                metric(row, "feature_score")
+                - safe_float((row.get("entry_feature") or {}).get("line_strength_rank")) * 3.0
+                + safe_float((row.get("entry_feature") or {}).get("line_strength")) * 0.03,
+                metric(row, "top3_score"),
+                -int(row["car_no"]),
+            ),
+        )
+        picked = [first, second, third]
+
+    combo = [int(row["car_no"]) for row in picked]
+    score_value = sum(metric(row, "feature_score") for row in picked)
+    return (
+        combo,
+        round(score_value, 3),
+        feature_reason(prediction_type),
+        "",
+        feature_detail_json(prediction_type, picked),
+    )
+
+
 def pick_combo(prediction_type: str, scored: list[dict]) -> tuple[list[int], float, str, str, str]:
+    if prediction_type in FEATURE_PREDICTION_TYPES:
+        return pick_feature_combo(prediction_type, scored)
+
     if len(scored) < 3:
         return [], 0, "出走表データが不足しています。", "", ""
 
@@ -530,7 +756,14 @@ def confidence(score_value: float, has_same_venue_yesterday: bool) -> str:
     return "C"
 
 
-def bet_combinations(predicted: list[int]) -> dict[str, list[str]]:
+def bet_combinations(predicted: list[int], prediction_type: str | None = None) -> dict[str, list[str]]:
+    if prediction_type == TYPE_FEATURE_BOX_3RENTAN:
+        return {
+            TRIFECTA: [
+                "-".join(str(item) for item in combination)
+                for combination in permutations(predicted, 3)
+            ]
+        }
     first, second, third = predicted
     top2 = "=".join(str(item) for item in sorted([first, second]))
     top3 = "=".join(str(item) for item in sorted([first, second, third]))
@@ -1075,7 +1308,7 @@ def ensure_prediction_bets(conn) -> int:
             int(prediction["predicted_2nd"]),
             int(prediction["predicted_3rd"]),
         ]
-        for bet_type, combinations in bet_combinations(predicted).items():
+        for bet_type, combinations in bet_combinations(predicted, prediction["prediction_type"]).items():
             for combination in combinations:
                 cursor = conn.execute(
                     """
@@ -1180,7 +1413,7 @@ def generate_predictions(conn, target_date: str, replace: bool = False) -> int:
         return 0
     sample_kind = "backtest" if target_date < default_target_date() else "live"
     saved = 0
-    for prediction_type in PREDICTION_TYPES:
+    for prediction_type in ALL_PREDICTION_TYPES:
         candidates = []
         for race in races:
             scored = scored_by_race[race["race_id"]]
