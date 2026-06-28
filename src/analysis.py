@@ -172,7 +172,8 @@ def section(title: str, html_body: str, intro: str = "") -> str:
 
 def is_dev_environment() -> bool:
     env = os.environ.get("SITE_ENV") or os.environ.get("APP_ENV") or ""
-    return env.lower() in {"dev", "development", "local"}
+    repository = os.environ.get("GITHUB_REPOSITORY") or ""
+    return env.lower() in {"dev", "development", "local"} or repository == DEV_GITHUB_REPOSITORY
 
 
 def page(title: str, active: str, body: str) -> str:
