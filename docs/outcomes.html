@@ -212,6 +212,86 @@
       height: 3px;
       border-radius: 999px;
     }
+    .dice-panel {
+      display: grid;
+      gap: 18px;
+    }
+    .dice-controls {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+      align-items: end;
+    }
+    .dice-controls label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .dice-controls select,
+    .dice-controls input {
+      width: 100%;
+      min-height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+      background: #fff;
+      color: var(--ink);
+      font: inherit;
+    }
+    .dice-button {
+      min-height: 42px;
+      border: 0;
+      border-radius: 8px;
+      padding: 9px 16px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .dice-button:hover {
+      background: #0b615b;
+    }
+    .dice-summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 10px;
+    }
+    .dice-summary div {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fbfcfd;
+    }
+    .dice-summary span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .dice-summary strong {
+      display: block;
+      margin-top: 4px;
+      font-size: 22px;
+    }
+    .dice-results {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+      gap: 8px;
+    }
+    .dice-ticket {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 8px;
+      background: #fff;
+      text-align: center;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+    }
+    .dice-note {
+      color: var(--muted);
+      font-size: 13px;
+    }
     .heatmap {
       padding: 0 0 2px;
       overflow-x: auto;
@@ -802,7 +882,7 @@
   <header>
     <div class="wrap">
       <h1>出目分析</h1>
-      <nav><a class="" href="index.html">TOP</a><a class="" href="venues.html">会場分析</a><a class="" href="car_numbers.html">車番分析</a><a class="active" href="outcomes.html">出目分析</a><a class="" href="payouts.html">配当分析</a><a class="" href="racers.html">選手分析</a><a class="" href="predictions.html">予想</a><a class="" href="prediction-results.html">予想結果</a><a class="" href="lineup-features.html">ライン解析</a><a class="" href="races.html">レース一覧</a><a class="" href="quality.html">データ品質</a><a class="" href="custom.html">独自ランキング</a></nav>
+      <nav><a class="" href="index.html">TOP</a><a class="" href="venues.html">会場分析</a><a class="" href="car_numbers.html">車番分析</a><a class="active" href="outcomes.html">出目分析</a><a class="" href="payouts.html">配当分析</a><a class="" href="racers.html">選手分析</a><a class="" href="predictions.html">予想</a><a class="" href="prediction-results.html">予想結果</a><a class="" href="lineup-features.html">ライン解析</a><a class="" href="dice-bets.html">サイコロ車券</a><a class="" href="races.html">レース一覧</a><a class="" href="quality.html">データ品質</a><a class="" href="custom.html">独自ランキング</a></nav>
     </div>
   </header>
   <main>

@@ -196,6 +196,7 @@ def page(title: str, active: str, body: str) -> str:
     nav_items.insert(6, ("predictions.html", "予想", "predictions"))
     nav_items.insert(7, ("prediction-results.html", "予想結果", "prediction-results"))
     nav_items.insert(8, ("lineup-features.html", "ライン解析", "lineup-features"))
+    nav_items.insert(9, ("dice-bets.html", "サイコロ車券", "dice-bets"))
     nav = "".join(
         f'<a class="{"active" if key == active else ""}" href="{href}">{label}</a>'
         for href, label, key in nav_items
@@ -413,6 +414,86 @@ def page(title: str, active: str, body: str) -> str:
       width: 18px;
       height: 3px;
       border-radius: 999px;
+    }}
+    .dice-panel {{
+      display: grid;
+      gap: 18px;
+    }}
+    .dice-controls {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+      align-items: end;
+    }}
+    .dice-controls label {{
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }}
+    .dice-controls select,
+    .dice-controls input {{
+      width: 100%;
+      min-height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+      background: #fff;
+      color: var(--ink);
+      font: inherit;
+    }}
+    .dice-button {{
+      min-height: 42px;
+      border: 0;
+      border-radius: 8px;
+      padding: 9px 16px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 800;
+      cursor: pointer;
+    }}
+    .dice-button:hover {{
+      background: #0b615b;
+    }}
+    .dice-summary {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 10px;
+    }}
+    .dice-summary div {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fbfcfd;
+    }}
+    .dice-summary span {{
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }}
+    .dice-summary strong {{
+      display: block;
+      margin-top: 4px;
+      font-size: 22px;
+    }}
+    .dice-results {{
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+      gap: 8px;
+    }}
+    .dice-ticket {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 8px;
+      background: #fff;
+      text-align: center;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+    }}
+    .dice-note {{
+      color: var(--muted);
+      font-size: 13px;
     }}
     .heatmap {{
       padding: 0 0 2px;
@@ -5174,6 +5255,132 @@ def render_lineup_features(conn) -> str:
     return page("ライン解析", "lineup-features", body)
 
 
+def render_dice_bets() -> str:
+    body = """
+    <section>
+      <h2>サイコロ車券</h2>
+      <div class="dice-panel" id="dice-bets">
+        <div class="dice-controls">
+          <label>車立て
+            <select id="dice-car-count">
+              <option value="5">5車</option>
+              <option value="6">6車</option>
+              <option value="7" selected>7車</option>
+              <option value="8">8車</option>
+              <option value="9">9車</option>
+            </select>
+          </label>
+          <label>買い目数
+            <input id="dice-ticket-count" type="number" min="5" max="100" value="10">
+          </label>
+          <label>賭式
+            <select id="dice-bet-type">
+              <option value="wide">ワイド</option>
+              <option value="two_pair">2車複</option>
+              <option value="two_exact">2車単</option>
+              <option value="trio">3連複</option>
+              <option value="trifecta" selected>3連単</option>
+            </select>
+          </label>
+          <button class="dice-button" id="dice-roll" type="button">サイコロを振る</button>
+        </div>
+        <div class="dice-summary" id="dice-summary" aria-live="polite"></div>
+        <div class="dice-note" id="dice-note"></div>
+        <div class="dice-results" id="dice-results"></div>
+      </div>
+    </section>
+    <script>
+    (() => {
+      const carCount = document.getElementById("dice-car-count");
+      const ticketCount = document.getElementById("dice-ticket-count");
+      const betType = document.getElementById("dice-bet-type");
+      const roll = document.getElementById("dice-roll");
+      const summary = document.getElementById("dice-summary");
+      const note = document.getElementById("dice-note");
+      const results = document.getElementById("dice-results");
+
+      const labels = {
+        wide: "ワイド",
+        two_pair: "2車複",
+        two_exact: "2車単",
+        trio: "3連複",
+        trifecta: "3連単"
+      };
+
+      const cars = (count) => Array.from({ length: count }, (_, index) => index + 1);
+      const comboText = (combo, type) => {
+        if (type === "two_exact" || type === "trifecta") return combo.join("-");
+        return combo.join("=");
+      };
+      const sortCombos = (items) => items.sort((a, b) => {
+        for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+          const diff = (a[i] || 0) - (b[i] || 0);
+          if (diff) return diff;
+        }
+        return 0;
+      });
+      const shuffle = (items) => {
+        const copy = [...items];
+        for (let i = copy.length - 1; i > 0; i -= 1) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [copy[i], copy[j]] = [copy[j], copy[i]];
+        }
+        return copy;
+      };
+
+      const allCombos = (count, type) => {
+        const ns = cars(count);
+        const combos = [];
+        if (type === "wide" || type === "two_pair") {
+          for (let i = 0; i < ns.length; i += 1) {
+            for (let j = i + 1; j < ns.length; j += 1) combos.push([ns[i], ns[j]]);
+          }
+        } else if (type === "two_exact") {
+          ns.forEach((a) => ns.forEach((b) => { if (a !== b) combos.push([a, b]); }));
+        } else if (type === "trio") {
+          for (let i = 0; i < ns.length; i += 1) {
+            for (let j = i + 1; j < ns.length; j += 1) {
+              for (let k = j + 1; k < ns.length; k += 1) combos.push([ns[i], ns[j], ns[k]]);
+            }
+          }
+        } else if (type === "trifecta") {
+          ns.forEach((a) => ns.forEach((b) => ns.forEach((c) => {
+            if (a !== b && a !== c && b !== c) combos.push([a, b, c]);
+          })));
+        }
+        return combos;
+      };
+
+      const render = () => {
+        const count = Number(carCount.value);
+        const requested = Math.max(5, Math.min(100, Number(ticketCount.value || 5)));
+        ticketCount.value = requested;
+        const type = betType.value;
+        const pool = allCombos(count, type);
+        const generated = Math.min(requested, pool.length);
+        const picked = sortCombos(shuffle(pool).slice(0, generated));
+
+        summary.innerHTML = [
+          ["賭式", labels[type]],
+          ["指定", `${requested}点`],
+          ["生成", `${generated}点`],
+          ["合計", `${(generated * 100).toLocaleString("ja-JP")}円`]
+        ].map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`).join("");
+        note.textContent = requested > pool.length
+          ? `${count}車 / ${labels[type]} の最大点数は ${pool.length}点です。`
+          : "";
+        results.innerHTML = picked.map((combo) => `<div class="dice-ticket">${comboText(combo, type)}</div>`).join("");
+      };
+
+      roll.addEventListener("click", render);
+      [carCount, ticketCount, betType].forEach((item) => item.addEventListener("change", render));
+      render();
+    })();
+    </script>
+    """
+    return page("サイコロ車券", "dice-bets", body)
+
+
 def render_race_detail_shell() -> str:
     body = """
     <section>
@@ -5288,6 +5495,7 @@ def export_all(output_dir: Path = DOCS_DIR, detail_dates: set[str] | None = None
             "predictions.html": render_predictions(conn),
             "prediction-results.html": render_prediction_results(conn),
             "lineup-features.html": render_lineup_features(conn),
+            "dice-bets.html": render_dice_bets(),
             "quality.html": render_quality(conn),
             "custom.html": render_custom_v2(conn),
             "race_detail.html": render_race_detail_shell(),
