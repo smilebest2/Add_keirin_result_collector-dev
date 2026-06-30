@@ -116,8 +116,9 @@ def rich_table(headers: list[str], data: list[dict], fields: list[str], empty="�
 def is_safe_inline_html(value) -> bool:
     if not isinstance(value, str):
         return False
-    return value.startswith("<a ") or value.startswith('<div class="prediction-pick') or (
-        value.startswith('<span class="') and value.endswith("</span>") and "<script" not in value.lower()
+    lower = value.lower()
+    return value.startswith("<a ") or value.startswith('<div class="prediction-pick') or value.startswith('<details class="compact-reason"') or value.startswith('<details class="compact-components"') or (
+        value.startswith('<span class="') and value.endswith("</span>") and "<script" not in lower
     )
 
 
@@ -380,6 +381,39 @@ def page(title: str, active: str, body: str) -> str:
       text-align: right;
       white-space: nowrap;
     }}
+    .result-graph-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 16px;
+    }}
+    .line-chart {{
+      padding: 14px 15px 16px;
+    }}
+    .line-chart svg {{
+      display: block;
+      width: 100%;
+      height: auto;
+      overflow: visible;
+    }}
+    .line-legend {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }}
+    .line-legend span {{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }}
+    .line-legend i {{
+      display: inline-block;
+      width: 18px;
+      height: 3px;
+      border-radius: 999px;
+    }}
     .heatmap {{
       padding: 0 0 2px;
       overflow-x: auto;
@@ -557,6 +591,64 @@ def page(title: str, active: str, body: str) -> str:
       margin-top: 5px;
       color: var(--muted);
       font-size: 12px;
+    }}
+    #daily-recommendations td:nth-child(8) {{
+      min-width: 260px;
+      max-width: 520px;
+      white-space: normal;
+    }}
+    .compact-reason {{
+      max-width: 520px;
+      color: var(--ink);
+    }}
+    .compact-reason summary {{
+      cursor: pointer;
+      color: var(--accent-2);
+      font-weight: 700;
+      list-style-position: inside;
+    }}
+    .compact-reason div {{
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: normal;
+    }}
+    .compact-components {{
+      min-width: 220px;
+      max-width: 360px;
+      white-space: normal;
+    }}
+    .compact-components summary {{
+      cursor: pointer;
+      color: var(--accent-2);
+      font-weight: 700;
+      list-style-position: inside;
+    }}
+    .compact-components div {{
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: normal;
+    }}
+    .analysis-compact-table td:nth-child(12),
+    .analysis-compact-table td:nth-child(13) {{
+      min-width: 220px;
+      max-width: 360px;
+      white-space: normal;
+    }}
+    .recommendation-toolbar {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 15px 0;
+      color: var(--muted);
+      font-size: 13px;
+    }}
+    .recommendation-toolbar strong {{
+      color: var(--ink);
     }}
     .pill.buy {{
       background: #dcfce7;
@@ -965,6 +1057,187 @@ def bar_chart(data: list[dict], label_field: str, value_field: str, value_format
             '</div>'
         )
     return '<div class="chart">' + "".join(html_rows) + "</div>"
+
+
+def line_chart(data: list[dict], label_field: str, series: list[tuple[str, str, str]], limit=30) -> str:
+    chart_data = data[-limit:]
+    values: list[float] = []
+    for row in chart_data:
+        for key, _, _ in series:
+            value = to_float(row.get(key))
+            if value is not None:
+                values.append(value)
+    if not chart_data or not values:
+        return '<div class="empty">グラフ化できるデータがありません</div>'
+
+    width = 640
+    height = 220
+    pad_left = 44
+    pad_right = 18
+    pad_top = 18
+    pad_bottom = 34
+    plot_width = width - pad_left - pad_right
+    plot_height = height - pad_top - pad_bottom
+    min_value = 0
+    max_value = max(100, max(values))
+
+    def point(index: int, value: float) -> tuple[float, float]:
+        x = pad_left + (plot_width * index / max(1, len(chart_data) - 1))
+        y = pad_top + plot_height - ((value - min_value) / (max_value - min_value) * plot_height)
+        return x, y
+
+    grid_lines = []
+    for tick in [0, 25, 50, 75, 100]:
+        y = pad_top + plot_height - (tick / max_value * plot_height)
+        grid_lines.append(
+            f'<line x1="{pad_left}" y1="{y:.1f}" x2="{width - pad_right}" y2="{y:.1f}" stroke="#e5eaf0" />'
+            f'<text x="8" y="{y + 4:.1f}" font-size="11" fill="#697586">{tick}%</text>'
+        )
+
+    polylines = []
+    for key, label, color in series:
+        points = []
+        for index, row in enumerate(chart_data):
+            value = to_float(row.get(key))
+            if value is None:
+                continue
+            x, y = point(index, value)
+            points.append(f"{x:.1f},{y:.1f}")
+        if points:
+            polylines.append(
+                f'<polyline points="{" ".join(points)}" fill="none" stroke="{h(color)}" '
+                f'stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />'
+            )
+
+    first_label = chart_data[0].get(label_field, "")
+    last_label = chart_data[-1].get(label_field, "")
+    legend = "".join(
+        f'<span><i style="background:{h(color)}"></i>{h(label)}</span>'
+        for _, label, color in series
+    )
+    return (
+        '<div class="line-chart">'
+        f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="日別推移グラフ">'
+        f'{"".join(grid_lines)}'
+        f'<line x1="{pad_left}" y1="{pad_top + plot_height}" x2="{width - pad_right}" y2="{pad_top + plot_height}" stroke="#cbd5df" />'
+        f'{"".join(polylines)}'
+        f'<text x="{pad_left}" y="{height - 8}" font-size="11" fill="#697586">{h(first_label)}</text>'
+        f'<text x="{width - pad_right}" y="{height - 8}" text-anchor="end" font-size="11" fill="#697586">{h(last_label)}</text>'
+        '</svg>'
+        f'<div class="line-legend">{legend}</div>'
+        '</div>'
+    )
+
+
+def race_context_label(row: dict) -> str:
+    race_class = str(row.get("race_class") or row.get("race_title") or "")
+    if "初特選" in race_class or "初日特選" in race_class:
+        return "初日特選"
+    if "特選" in race_class:
+        return "特選"
+    if "準決" in race_class:
+        return "準決勝"
+    if "決勝" in race_class:
+        return "決勝"
+    if "予選" in race_class:
+        return "予選"
+    if "一般" in race_class:
+        return "一般/敗者戦"
+    if "選抜" in race_class:
+        return "選抜"
+    return "その他"
+
+
+def axis_line_role(row: dict) -> str:
+    if row.get("axis_is_tanki"):
+        return "単騎"
+    position = row.get("axis_line_position")
+    try:
+        position = int(position)
+    except (TypeError, ValueError):
+        return "並び不明"
+    if position == 1:
+        return "先頭"
+    if position == 2:
+        return "番手"
+    if position >= 3:
+        return "三番手以降"
+    return "並び不明"
+
+
+def axis_line_size_label(row: dict) -> str:
+    if row.get("axis_is_tanki"):
+        return "単騎"
+    size = row.get("axis_line_size")
+    try:
+        size = int(size)
+    except (TypeError, ValueError):
+        return "不明"
+    if size <= 1:
+        return "単騎"
+    if size == 2:
+        return "2車ライン"
+    if size == 3:
+        return "3車ライン"
+    return "4車以上ライン"
+
+
+def axis_condition_rows(items: list[dict], group_field: str, label: str, limit=12) -> list[dict]:
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for row in items:
+        value = row.get(group_field) or "不明"
+        groups[str(value)].append(row)
+    result = []
+    for group, rows_in_group in groups.items():
+        total = len(rows_in_group)
+        axis_miss = sum(1 for item in rows_in_group if not item.get("hit_1st"))
+        exact_hits = sum(1 for item in rows_in_group if item.get("hit_exact"))
+        returned = sum(int(item.get("return_amount") or 0) for item in rows_in_group)
+        stake = sum(int(item.get("result_stake_amount") or item.get("stake_amount") or 0) for item in rows_in_group)
+        result.append({
+            "condition": group,
+            "axis_miss_count": axis_miss,
+            "axis_miss_rate": axis_miss * 100 / total if total else 0,
+            "exact_rate": exact_hits * 100 / total if total else 0,
+            "predictions": total,
+            "roi": returned * 100 / stake if stake else 0,
+            "_class": sample_class(total, 30),
+        })
+    return sorted(
+        result,
+        key=lambda row: (row["axis_miss_rate"], row["axis_miss_count"], row["predictions"]),
+        reverse=True,
+    )[:limit]
+
+
+def format_axis_condition_rows(items: list[dict]) -> list[dict]:
+    return [
+        {
+            "condition": row["condition"],
+            "axis_miss_count": number(row["axis_miss_count"]),
+            "axis_miss_rate": pct(row["axis_miss_rate"]),
+            "exact_rate": pct(row["exact_rate"]),
+            "predictions": number(row["predictions"]),
+            "roi": pct(row["roi"]),
+            "_class": row.get("_class", ""),
+        }
+        for row in items
+    ]
+
+
+def prediction_miss_reason(row: dict) -> str:
+    if row.get("hit_exact"):
+        return "的中"
+    if not row.get("hit_1st"):
+        return "軸選手が飛んだ"
+    top3_count = int(row.get("hit_top3_count") or 0)
+    if top3_count >= 3:
+        return "順番違い"
+    if row.get("hit_top2"):
+        return "3着候補抜け"
+    if top3_count >= 2:
+        return "相手抜け"
+    return "相手候補不足"
 
 
 def heat_class(value, max_value) -> str:
@@ -3496,8 +3769,34 @@ def chaos_display(features: dict) -> str:
     level = features.get("chaos_level") or "-"
     reasons = features.get("chaos_reasons") or []
     score_text = decimal(score, 0) if score is not None else "-"
-    reason_text = "、".join(str(item) for item in reasons[:3])
+    reason_text = "、".join(str(item) for item in reasons[:2])
     return f"{score_text} / {level}" + (f" / {reason_text}" if reason_text else "")
+
+
+def compact_reason_text(value: str | None, max_len: int = 74) -> str:
+    text = re.sub(r"\s+", " ", str(value or "-")).strip()
+    if len(text) <= max_len:
+        return text
+    return text[:max_len].rstrip("、。,. ") + "..."
+
+
+def compact_reason_html(value: str | None) -> str:
+    text = re.sub(r"\s+", " ", str(value or "-")).strip()
+    short = compact_reason_text(text)
+    if text == short or text == "-":
+        return h(short)
+    return f'<details class="compact-reason"><summary>{h(short)}</summary><div>{h(text)}</div></details>'
+
+
+def compact_components_html(value: str | None, visible_count: int = 3) -> str:
+    text = re.sub(r"\s+", " ", str(value or "-")).strip()
+    if text == "-":
+        return "-"
+    parts = [part.strip() for part in text.split(" / ") if part.strip()]
+    if len(parts) <= visible_count:
+        return h(text)
+    short = " / ".join(parts[:visible_count]) + f" / 他{len(parts) - visible_count}件"
+    return f'<details class="compact-components"><summary>{h(short)}</summary><div>{h(text)}</div></details>'
 
 
 def recommendation_decision(row: dict, features: dict) -> tuple[str, str]:
@@ -3556,6 +3855,7 @@ def bet_recommendation_rows_for_date(conn, target_date: str | None) -> list[dict
                 else "参考データ不足"
             ),
             "classification_reason": row.get("reason_text") or row.get("skip_reason") or "-",
+            "classification_reason_compact": compact_reason_html(row.get("reason_text") or row.get("skip_reason") or "-"),
             "_data": {
                 "decision": decision_key,
                 "venue": row.get("venue") or "",
@@ -3607,8 +3907,9 @@ def render_predictions(conn) -> str:
                 <div class="decision-card"><span>見送り</span><strong>{h(number(skip_count))}</strong><small>基準未満・材料不足</small></div>
                 <div class="decision-card"><span>荒れ度 high</span><strong>{h(number(high_chaos_count))}</strong><small>波乱警戒のレース</small></div>
               </div>
+              <div class="recommendation-toolbar"><span>初期表示は <strong>買い候補＋慎重</strong> のみです。見送りは判定フィルタで表示できます。</span><span id="recommendation-visible-count"></span></div>
               <div class="filters" id="recommendation-filters">
-                <label>判定<select id="recommendation-filter-decision"><option value="">すべて</option><option value="buy">買い候補</option><option value="caution">慎重</option><option value="skip">見送り</option></select></label>
+                <label>判定<select id="recommendation-filter-decision"><option value="active" selected>買い候補＋慎重</option><option value="buy">買い候補</option><option value="caution">慎重</option><option value="skip">見送り</option><option value="">すべて</option></select></label>
                 <label>会場<select id="recommendation-filter-venue"><option value="">すべて</option>{''.join(f'<option value="{h(venue)}">{h(venue)}</option>' for venue in recommendation_venues)}</select></label>
                 <label>券種<select id="recommendation-filter-bet"><option value="">すべて</option>{''.join(f'<option value="{h(bet)}">{h(bet)}</option>' for bet in recommendation_bets)}</select></label>
                 <label>荒れ度<select id="recommendation-filter-chaos"><option value="">すべて</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label>
@@ -3633,7 +3934,7 @@ def render_predictions(conn) -> str:
                       "buy",
                       "confidence_display",
                       "chaos_display",
-                      "classification_reason",
+                      "classification_reason_compact",
                   ],
               ).replace("<table>", '<table id="daily-recommendations">', 1)}
               <script>
@@ -3645,23 +3946,32 @@ def render_predictions(conn) -> str:
                 const bet = document.getElementById("recommendation-filter-bet");
                 const chaos = document.getElementById("recommendation-filter-chaos");
                 const rows = Array.from(table.querySelectorAll("tbody tr"));
+                const visibleCount = document.getElementById("recommendation-visible-count");
+                const decisionMatches = (row) => {{
+                  if (decision.value === "active") return row.dataset.decision === "buy" || row.dataset.decision === "caution";
+                  return !decision.value || row.dataset.decision === decision.value;
+                }};
                 const apply = () => {{
+                  let shown = 0;
                   rows.forEach((row) => {{
                     const show =
-                      (!decision.value || row.dataset.decision === decision.value) &&
+                      decisionMatches(row) &&
                       (!venue.value || row.dataset.venue === venue.value) &&
                       (!bet.value || row.dataset.bet === bet.value) &&
                       (!chaos.value || row.dataset.chaos === chaos.value);
                     row.hidden = !show;
+                    if (show) shown += 1;
                   }});
+                  if (visibleCount) visibleCount.textContent = `表示 ${{shown}} / ${{rows.length}} 件`;
                 }};
                 [decision, venue, bet, chaos].forEach((item) => item.addEventListener("change", apply));
+                apply();
               }})();
               </script>
             """,
             "最初に見る判断表です。買い候補だけに絞ってから、荒れ度と理由を確認してください。",
         )
-    body += section("サマリー", table(
+    body += section("予想タイプ別サマリー", table(
         ["予想タイプ", "件数", "平均スコア"],
         sorted(
             [{"prediction_type": row["prediction_type"], "predictions": row["predictions"], "avg_score": decimal(row["avg_score"], 1)} for row in summary_rows],
@@ -3737,7 +4047,7 @@ def render_predictions(conn) -> str:
 
         body += section("全レース予想（詳細）", f"""
           <details class="analysis-fold">
-            <summary>5タイプの買い目を横並びで確認する</summary>
+            <summary>詳細: 全レースの5タイプ予想を開く</summary>
             <div class="filters" id="prediction-filters">
               <label>会場<select id="prediction-filter-venue"><option value="">すべて</option>{venue_options}</select></label>
               <label>信頼度<select id="prediction-filter-confidence"><option value="">すべて</option><option value="A">A</option><option value="B">B</option><option value="C">C</option></select></label>
@@ -3778,8 +4088,8 @@ def render_predictions(conn) -> str:
         f'<div class="prediction-type-note"><strong>{h(prediction_type.replace("予想", ""))}</strong><span>{h(summary)}</span></div>'
         for prediction_type, summary in PREDICTION_TYPE_SUMMARY.items()
     )
-    body += section("予想タイプの説明", f'<div class="prediction-type-grid">{type_notes}</div>')
-    body += section("賭式別の買い目", table(
+    body += section("詳細: 予想タイプの説明", f'<div class="prediction-type-grid">{type_notes}</div>')
+    body += section("詳細: 賭式別の買い目", table(
         ["賭式", "買い目の作り方", "購入点数", "1予想あたり投資額"],
         [
             {"bet_type": "2車複", "rule": "予想1・2着の2車（順不同）", "tickets": "1点", "stake": "100円"},
@@ -3792,12 +4102,30 @@ def render_predictions(conn) -> str:
     ), "各予想タイプの順位予想から、5賭式の買い目を自動生成します。")
 
     if is_dev_environment() and prediction_rows:
-        analysis_rows = prediction_score_analysis_rows(prediction_rows)[:PREDICTION_ANALYSIS_ROW_LIMIT]
-        body += section("予想補正値 分析", table(
+        raw_analysis_rows = prediction_score_analysis_rows(prediction_rows)
+        analysis_rows = []
+        for row in raw_analysis_rows[:300]:
+            analysis_rows.append({
+                **row,
+                "base_components_compact": compact_components_html(row.get("base_components")),
+                "type_components_compact": compact_components_html(row.get("type_components")),
+            })
+        analysis_table = rich_table(
             ["対象日", "予想タイプ", "レース", "発走", "信頼度", "買い目順", "車番", "選手", "基礎点", "タイプ補正", "最終点", "基礎内訳", "タイプ補正内訳", "予想スコア", "モデル"],
             analysis_rows,
-            ["race_date", "prediction_type", "race", "start_time", "confidence", "pick_order", "car_no", "racer_name", "base_score", "type_adjustment", "final_score", "base_components", "type_components", "prediction_score", "model_version"],
-        ), "dev環境のみ表示します。買い目に入った選手ごとの基礎点、タイプ補正、最終点を分析するための表です。")
+            ["race_date", "prediction_type", "race", "start_time", "confidence", "pick_order", "car_no", "racer_name", "base_score", "type_adjustment", "final_score", "base_components_compact", "type_components_compact", "prediction_score", "model_version"],
+        ).replace("<table>", '<table class="analysis-compact-table">', 1)
+        body += section(
+            "詳細: 予想補正値 分析",
+            f"""
+            <details class="analysis-fold">
+              <summary>補正値テーブルを開く（表示 {len(analysis_rows)} / 全 {len(raw_analysis_rows)} 行）</summary>
+              <div class="inline-note">買い目に入った選手の基礎点・タイプ補正・最終点です。内訳は先頭だけ表示し、クリックで全文を開けます。</div>
+              {analysis_table}
+            </details>
+            """,
+            "dev環境のみ表示します。通常の確認では上の買い候補を優先し、補正値は気になるレースの深掘りに使います。",
+        )
 
     if not prediction_rows:
         body += section("予想", '<div class="empty">予想データがありません。手動実行または毎朝の自動取得後に表示されます。</div>')
@@ -3819,9 +4147,16 @@ def render_prediction_results(conn) -> str:
                r.return_amount, r.roi, r.checked_at,
                COALESCE(s.venue, m.venue) AS venue,
                COALESCE(s.race_no, m.race_no) AS race_no,
+               COALESCE(s.race_class, m.race_class) AS race_class,
                s.race_title,
                s.start_time,
                s.lineup_text,
+               lf.line_position AS axis_line_position,
+               lf.line_size AS axis_line_size,
+               lf.followers AS axis_followers,
+               lf.is_tanki AS axis_is_tanki,
+               lf.is_max_line AS axis_is_max_line,
+               lf.bunsen_count AS axis_bunsen_count,
                (
                  SELECT GROUP_CONCAT(e.car_no, ' ')
                  FROM race_entry e
@@ -3831,6 +4166,9 @@ def render_prediction_results(conn) -> str:
         JOIN race_prediction_result r ON r.prediction_id = p.id
         LEFT JOIN race_schedule s ON s.race_id = p.race_id
         LEFT JOIN race_master m ON m.race_id = p.race_id
+        LEFT JOIN race_line_features lf
+          ON lf.race_id = p.race_id
+         AND lf.car_no = p.predicted_1st
         ORDER BY p.race_date DESC, COALESCE(s.venue, m.venue),
                  COALESCE(s.race_no, m.race_no), p.prediction_type
     """)
@@ -3948,6 +4286,32 @@ def render_prediction_results(conn) -> str:
         if result_rows else 0
     )
     latest_checked = max((row.get("checked_at") or "" for row in result_rows), default="")
+    live_daily_trend = [
+        row for row in daily_trend
+        if (row.get("sample_kind") or "live") == "live"
+    ]
+    live_result_rows = [
+        row for row in all_result_rows
+        if (row.get("sample_kind") or "live") == "live"
+    ]
+    miss_reason_counts: dict[str, int] = defaultdict(int)
+    for row in live_result_rows:
+        reason = prediction_miss_reason(row)
+        if reason != "的中":
+            miss_reason_counts[reason] += 1
+    miss_reason_rows = [
+        {"reason": reason, "count": count}
+        for reason, count in sorted(miss_reason_counts.items(), key=lambda item: item[1], reverse=True)
+    ]
+    axis_analysis_rows = []
+    for row in live_result_rows:
+        item = dict(row)
+        item["race_context"] = race_context_label(row)
+        item["axis_line_role"] = axis_line_role(row)
+        item["axis_line_size_label"] = axis_line_size_label(row)
+        item["bunsen_label"] = f'{int(row.get("axis_bunsen_count") or 0)}分戦' if row.get("axis_bunsen_count") is not None else "不明"
+        item["confidence_label"] = row.get("confidence") or "C"
+        axis_analysis_rows.append(item)
     body = f"""
     <div class="grid">
       <div class="card"><span>対象日</span><strong>{h(latest_result_date or "-")}</strong></div>
@@ -4052,6 +4416,81 @@ def render_prediction_results(conn) -> str:
         bet_daily_display,
         ["race_date", "bet_type", "tickets", "hits", "hit_rate", "stake_total", "return_total", "roi"],
     ))
+
+    type_chart_rows = [
+        {
+            "prediction_type": row["prediction_type"],
+            "exact_rate": row["exact_rate"] or 0,
+            "first_rate": row["first_rate"] or 0,
+            "avg_top3_count": row["avg_top3_count"] or 0,
+        }
+        for row in sorted(total, key=lambda item: prediction_type_order(item["prediction_type"]))
+    ]
+    bet_chart_rows = [
+        {
+            "bet_type": row["bet_type"],
+            "hit_rate": row["hit_rate"] or 0,
+            "roi": row["roi"] or 0,
+        }
+        for row in sorted(
+            bet_type_total,
+            key=lambda item: PREDICTION_BET_TYPES.index(item["bet_type"]) if item["bet_type"] in PREDICTION_BET_TYPES else 99,
+        )
+    ]
+    body += section("予想結果グラフ", f"""
+      <div class="result-graph-grid">
+        {section("日別 的中率推移", line_chart(
+            live_daily_trend,
+            "race_date",
+            [
+                ("exact_rate", "完全的中率", "#0f766e"),
+                ("first_rate", "1着的中率", "#1d4ed8"),
+            ],
+            30,
+        ))}
+        {section("予想タイプ別 的中率", bar_chart(type_chart_rows, "prediction_type", "exact_rate", pct, 12))}
+        {section("賭式別 的中率", bar_chart(bet_chart_rows, "bet_type", "hit_rate", pct, 8))}
+        {section("外れ理由ランキング", bar_chart(miss_reason_rows, "reason", "count", lambda value: f"{int(value)}件", 8))}
+      </div>
+    """, "日々の推移、予想タイプ、賭式、外れ方をまとめて確認できます。外れ理由はlive予想の累計から分類しています。")
+
+    axis_by_context = axis_condition_rows(axis_analysis_rows, "race_context", "レース種別")
+    axis_by_line_role = axis_condition_rows(axis_analysis_rows, "axis_line_role", "ライン位置")
+    axis_by_line_size = axis_condition_rows(axis_analysis_rows, "axis_line_size_label", "ライン規模")
+    axis_by_confidence = axis_condition_rows(axis_analysis_rows, "confidence_label", "信頼度")
+    body += section("軸飛び条件分析", f"""
+      <div class="result-graph-grid">
+        {section("レース種別別 軸飛び率", bar_chart(axis_by_context, "condition", "axis_miss_rate", pct, 12))}
+        {section("ライン位置別 軸飛び率", bar_chart(axis_by_line_role, "condition", "axis_miss_rate", pct, 8))}
+        {section("ライン規模別 軸飛び率", bar_chart(axis_by_line_size, "condition", "axis_miss_rate", pct, 8))}
+        {section("信頼度別 軸飛び率", bar_chart(axis_by_confidence, "condition", "axis_miss_rate", pct, 8))}
+      </div>
+      <details class="analysis-fold">
+        <summary>軸飛び条件テーブルを開く</summary>
+        <div class="grid two">
+          {section("レース種別", table(
+              ["条件", "軸飛び", "軸飛び率", "完全的中率", "予想数", "回収率"],
+              format_axis_condition_rows(axis_by_context),
+              ["condition", "axis_miss_count", "axis_miss_rate", "exact_rate", "predictions", "roi"],
+          ))}
+          {section("ライン位置", table(
+              ["条件", "軸飛び", "軸飛び率", "完全的中率", "予想数", "回収率"],
+              format_axis_condition_rows(axis_by_line_role),
+              ["condition", "axis_miss_count", "axis_miss_rate", "exact_rate", "predictions", "roi"],
+          ))}
+          {section("ライン規模", table(
+              ["条件", "軸飛び", "軸飛び率", "完全的中率", "予想数", "回収率"],
+              format_axis_condition_rows(axis_by_line_size),
+              ["condition", "axis_miss_count", "axis_miss_rate", "exact_rate", "predictions", "roi"],
+          ))}
+          {section("信頼度", table(
+              ["条件", "軸飛び", "軸飛び率", "完全的中率", "予想数", "回収率"],
+              format_axis_condition_rows(axis_by_confidence),
+              ["condition", "axis_miss_count", "axis_miss_rate", "exact_rate", "predictions", "roi"],
+          ))}
+        </div>
+      </details>
+    """, "軸候補（予想1着）が外れた条件をlive予想の累計で分解します。サンプルが少ない条件は薄く表示します。")
 
     exact_hit_count = sum(1 for row in result_rows if row.get("hit_exact"))
     return_hit_count = sum(1 for row in result_rows if int(row.get("return_amount") or 0) > 0)

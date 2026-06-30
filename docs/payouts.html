@@ -179,6 +179,39 @@
       text-align: right;
       white-space: nowrap;
     }
+    .result-graph-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 16px;
+    }
+    .line-chart {
+      padding: 14px 15px 16px;
+    }
+    .line-chart svg {
+      display: block;
+      width: 100%;
+      height: auto;
+      overflow: visible;
+    }
+    .line-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .line-legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .line-legend i {
+      display: inline-block;
+      width: 18px;
+      height: 3px;
+      border-radius: 999px;
+    }
     .heatmap {
       padding: 0 0 2px;
       overflow-x: auto;
@@ -356,6 +389,64 @@
       margin-top: 5px;
       color: var(--muted);
       font-size: 12px;
+    }
+    #daily-recommendations td:nth-child(8) {
+      min-width: 260px;
+      max-width: 520px;
+      white-space: normal;
+    }
+    .compact-reason {
+      max-width: 520px;
+      color: var(--ink);
+    }
+    .compact-reason summary {
+      cursor: pointer;
+      color: var(--accent-2);
+      font-weight: 700;
+      list-style-position: inside;
+    }
+    .compact-reason div {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: normal;
+    }
+    .compact-components {
+      min-width: 220px;
+      max-width: 360px;
+      white-space: normal;
+    }
+    .compact-components summary {
+      cursor: pointer;
+      color: var(--accent-2);
+      font-weight: 700;
+      list-style-position: inside;
+    }
+    .compact-components div {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: normal;
+    }
+    .analysis-compact-table td:nth-child(12),
+    .analysis-compact-table td:nth-child(13) {
+      min-width: 220px;
+      max-width: 360px;
+      white-space: normal;
+    }
+    .recommendation-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 15px 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .recommendation-toolbar strong {
+      color: var(--ink);
     }
     .pill.buy {
       background: #dcfce7;
