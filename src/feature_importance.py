@@ -1,17 +1,81 @@
 import argparse
 import json
+import logging
 import math
 from datetime import datetime, timezone, timedelta
 
+from .config import LOG_DIR
 from .db import connect, init_db
 from .entry_features import FEATURE_COLUMNS
 
 
 JST = timezone(timedelta(hours=9))
 
+FEATURE_CATEGORY_RULES = [
+    ("line", "ライン特徴量", [
+        "line_",
+        "score_minus_line_avg",
+        "score_gap_line_top",
+        "age_gap_line_top",
+        "win_gap_line_top",
+        "score_rank_in_line",
+        "top3_rank_in_line",
+        "win_rate_rank_in_line",
+    ]),
+    ("race", "レース特徴量", [
+        "race_",
+        "score_minus_race_avg",
+        "win_rate_minus_race_avg",
+        "top3_minus_race_avg",
+        "bs_minus_race_avg",
+        "age_minus_race_avg",
+        "score_gap_top",
+        "score_gap_second",
+    ]),
+    ("leader", "先頭/番手特徴量", ["leader_", "is_second"]),
+    ("style", "脚質特徴量", ["style_", "escape", "dash", "mark", "chase"]),
+    ("age_score", "年齢/得点カテゴリ", ["age_", "score_"]),
+]
+
+
+def feature_category(feature_name: str) -> str:
+    for _key, label, patterns in FEATURE_CATEGORY_RULES:
+        if any(feature_name.startswith(pattern) or pattern in feature_name for pattern in patterns):
+            return label
+    return "その他"
+
+
+def category_summary(results: list[dict]) -> list[dict]:
+    grouped: dict[str, list[dict]] = {}
+    for row in results:
+        grouped.setdefault(row["feature_category"], []).append(row)
+    summaries = []
+    for category, items in grouped.items():
+        summaries.append({
+            "feature_category": category,
+            "features": len(items),
+            "gain": round(sum(row["gain"] for row in items), 8),
+            "split": sum(row["split"] for row in items),
+            "permutation_importance": round(sum(row["permutation_importance"] for row in items), 8),
+            "shap_importance": round(sum(row["shap_importance"] for row in items), 8),
+        })
+    return sorted(summaries, key=lambda row: (row["gain"], row["permutation_importance"]), reverse=True)
+
 
 def rows(conn, sql: str, params=()):
     return [dict(row) for row in conn.execute(sql, params).fetchall()]
+
+
+def setup_logging() -> None:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        handlers=[
+            logging.FileHandler(LOG_DIR / "feature_importance.log", mode="w", encoding="utf-8"),
+            logging.StreamHandler(),
+        ],
+    )
 
 
 def gini(labels: list[int]) -> float:
@@ -121,6 +185,7 @@ def compute_importance(conn, target_name: str = "is_top3", start_date: str | Non
             "split": split,
             "permutation_importance": round(permutation_proxy(values, labels), 8),
             "shap_importance": round(shap_proxy(values, labels), 8),
+            "feature_category": feature_category(feature),
             "sample_count": len(dataset),
             "created_at": now,
         })
@@ -129,14 +194,15 @@ def compute_importance(conn, target_name: str = "is_top3", start_date: str | Non
         INSERT INTO feature_importance
             (
                 target_name, feature_name, gain, split,
-                permutation_importance, shap_importance, sample_count, created_at
+                permutation_importance, shap_importance, feature_category, sample_count, created_at
             )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(target_name, feature_name) DO UPDATE SET
             gain = excluded.gain,
             split = excluded.split,
             permutation_importance = excluded.permutation_importance,
             shap_importance = excluded.shap_importance,
+            feature_category = excluded.feature_category,
             sample_count = excluded.sample_count,
             created_at = excluded.created_at
         """,
@@ -148,6 +214,7 @@ def compute_importance(conn, target_name: str = "is_top3", start_date: str | Non
                 row["split"],
                 row["permutation_importance"],
                 row["shap_importance"],
+                row["feature_category"],
                 row["sample_count"],
                 row["created_at"],
             )
@@ -155,10 +222,34 @@ def compute_importance(conn, target_name: str = "is_top3", start_date: str | Non
         ],
     )
     conn.commit()
-    return sorted(results, key=lambda row: (row["gain"], row["permutation_importance"]), reverse=True)
+    sorted_results = sorted(results, key=lambda row: (row["gain"], row["permutation_importance"]), reverse=True)
+    for row in sorted_results[:30]:
+        logging.info(
+            "feature_importance target=%s feature=%s category=%s gain=%.8f split=%s permutation=%.8f shap=%.8f samples=%s",
+            row["target_name"],
+            row["feature_name"],
+            row["feature_category"],
+            row["gain"],
+            row["split"],
+            row["permutation_importance"],
+            row["shap_importance"],
+            row["sample_count"],
+        )
+    for row in category_summary(sorted_results):
+        logging.info(
+            "feature_category_importance category=%s features=%s gain=%.8f split=%s permutation=%.8f shap=%.8f",
+            row["feature_category"],
+            row["features"],
+            row["gain"],
+            row["split"],
+            row["permutation_importance"],
+            row["shap_importance"],
+        )
+    return sorted_results
 
 
 def run(target_name: str = "is_top3", start_date: str | None = None, end_date: str | None = None, limit: int = 30) -> list[dict]:
+    setup_logging()
     with connect() as conn:
         return compute_importance(conn, target_name=target_name, start_date=start_date, end_date=end_date)[:limit]
 
@@ -170,7 +261,13 @@ def main() -> None:
     parser.add_argument("--end-date")
     parser.add_argument("--limit", type=int, default=30)
     args = parser.parse_args()
-    print(json.dumps(run(args.target, args.start_date, args.end_date, args.limit), ensure_ascii=False, indent=2))
+    setup_logging()
+    with connect() as conn:
+        results = compute_importance(conn, target_name=args.target, start_date=args.start_date, end_date=args.end_date)
+    print(json.dumps({
+        "ranking": results[:args.limit],
+        "category_summary": category_summary(results),
+    }, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

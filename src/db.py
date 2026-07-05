@@ -262,9 +262,12 @@ CREATE TABLE IF NOT EXISTS race_entry_features (
     line_no INTEGER NOT NULL DEFAULT 0,
     line_member_count INTEGER NOT NULL DEFAULT 0,
     line_average_score REAL NOT NULL DEFAULT 0,
+    line_score_avg REAL NOT NULL DEFAULT 0,
     line_max_score REAL NOT NULL DEFAULT 0,
     line_min_score REAL NOT NULL DEFAULT 0,
     line_score_std REAL NOT NULL DEFAULT 0,
+    line_top3_std REAL NOT NULL DEFAULT 0,
+    line_winrate_std REAL NOT NULL DEFAULT 0,
     line_average_win_rate REAL NOT NULL DEFAULT 0,
     line_average_top3_rate REAL NOT NULL DEFAULT 0,
     line_average_age REAL NOT NULL DEFAULT 0,
@@ -281,6 +284,9 @@ CREATE TABLE IF NOT EXISTS race_entry_features (
     line_total_h REAL NOT NULL DEFAULT 0,
     line_total_s REAL NOT NULL DEFAULT 0,
     line_score_rank INTEGER NOT NULL DEFAULT 0,
+    score_rank_in_line INTEGER NOT NULL DEFAULT 0,
+    top3_rank_in_line INTEGER NOT NULL DEFAULT 0,
+    win_rate_rank_in_line INTEGER NOT NULL DEFAULT 0,
     line_win_rate_rank INTEGER NOT NULL DEFAULT 0,
     line_bs_rank INTEGER NOT NULL DEFAULT 0,
     line_age_rank INTEGER NOT NULL DEFAULT 0,
@@ -336,6 +342,11 @@ CREATE TABLE IF NOT EXISTS race_entry_features (
     score_105plus INTEGER NOT NULL DEFAULT 0,
     line_strength REAL NOT NULL DEFAULT 0,
     line_strength_rank INTEGER NOT NULL DEFAULT 0,
+    line_strength_gap REAL NOT NULL DEFAULT 0,
+    line_strength_ratio REAL NOT NULL DEFAULT 0,
+    line_gap_top REAL NOT NULL DEFAULT 0,
+    line_gap_second REAL NOT NULL DEFAULT 0,
+    line_members INTEGER NOT NULL DEFAULT 0,
     is_single_line INTEGER NOT NULL DEFAULT 0,
     is_two_man_line INTEGER NOT NULL DEFAULT 0,
     is_three_man_line INTEGER NOT NULL DEFAULT 0,
@@ -359,6 +370,9 @@ CREATE TABLE IF NOT EXISTS feature_quality_log (
     min_value REAL NOT NULL DEFAULT 0,
     max_value REAL NOT NULL DEFAULT 0,
     avg_value REAL NOT NULL DEFAULT 0,
+    stddev_value REAL NOT NULL DEFAULT 0,
+    category_count INTEGER NOT NULL DEFAULT 0,
+    importance_value REAL NOT NULL DEFAULT 0,
     missing_rate REAL NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT ''
 );
@@ -371,9 +385,66 @@ CREATE TABLE IF NOT EXISTS feature_importance (
     split INTEGER NOT NULL DEFAULT 0,
     permutation_importance REAL NOT NULL DEFAULT 0,
     shap_importance REAL NOT NULL DEFAULT 0,
+    feature_category TEXT NOT NULL DEFAULT '',
     sample_count INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT '',
     UNIQUE (target_name, feature_name)
+);
+
+CREATE TABLE IF NOT EXISTS race_confidence (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    race_id TEXT NOT NULL,
+    race_date TEXT NOT NULL DEFAULT '',
+    venue TEXT NOT NULL DEFAULT '',
+    race_no INTEGER NOT NULL DEFAULT 0,
+    top1_car_no INTEGER NOT NULL DEFAULT 0,
+    top2_car_no INTEGER NOT NULL DEFAULT 0,
+    top3_car_no INTEGER NOT NULL DEFAULT 0,
+    top1_probability REAL NOT NULL DEFAULT 0,
+    top2_probability REAL NOT NULL DEFAULT 0,
+    top3_probability REAL NOT NULL DEFAULT 0,
+    probability_gap REAL NOT NULL DEFAULT 0,
+    probability_variance REAL NOT NULL DEFAULT 0,
+    probability_entropy REAL NOT NULL DEFAULT 0,
+    top1_top2_gap REAL NOT NULL DEFAULT 0,
+    top2_top3_gap REAL NOT NULL DEFAULT 0,
+    top3_top4_gap REAL NOT NULL DEFAULT 0,
+    line_count INTEGER NOT NULL DEFAULT 0,
+    tanki_count INTEGER NOT NULL DEFAULT 0,
+    max_line_members INTEGER NOT NULL DEFAULT 0,
+    line_member_variance REAL NOT NULL DEFAULT 0,
+    line_strength_gap REAL NOT NULL DEFAULT 0,
+    line_strength_ratio REAL NOT NULL DEFAULT 0,
+    confidence_score REAL NOT NULL DEFAULT 0,
+    confidence_stars TEXT NOT NULL DEFAULT '',
+    expected_value_score REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT '',
+    UNIQUE (race_id)
+);
+
+CREATE TABLE IF NOT EXISTS race_volatility_features (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    race_id TEXT NOT NULL,
+    race_date TEXT NOT NULL DEFAULT '',
+    venue TEXT NOT NULL DEFAULT '',
+    race_no INTEGER NOT NULL DEFAULT 0,
+    line_member_variance REAL NOT NULL DEFAULT 0,
+    line_strength_gap REAL NOT NULL DEFAULT 0,
+    score_minus_race_avg_variance REAL NOT NULL DEFAULT 0,
+    win_rate_variance REAL NOT NULL DEFAULT 0,
+    class_variance REAL NOT NULL DEFAULT 0,
+    age_variance REAL NOT NULL DEFAULT 0,
+    leader_score_gap REAL NOT NULL DEFAULT 0,
+    second_score_gap REAL NOT NULL DEFAULT 0,
+    tanki_count INTEGER NOT NULL DEFAULT 0,
+    line_count INTEGER NOT NULL DEFAULT 0,
+    high_payout INTEGER NOT NULL DEFAULT 0,
+    trifecta_payout INTEGER NOT NULL DEFAULT 0,
+    volatility_probability REAL NOT NULL DEFAULT 0,
+    volatility_bucket TEXT NOT NULL DEFAULT '',
+    model_name TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT '',
+    UNIQUE (race_id)
 );
 
 
@@ -447,6 +518,10 @@ CREATE INDEX IF NOT EXISTS idx_feature_quality_log_table
     ON feature_quality_log(table_name, created_at);
 CREATE INDEX IF NOT EXISTS idx_feature_importance_target
     ON feature_importance(target_name, gain);
+CREATE INDEX IF NOT EXISTS idx_race_confidence_date
+    ON race_confidence(race_date, confidence_score);
+CREATE INDEX IF NOT EXISTS idx_race_volatility_date
+    ON race_volatility_features(race_date, volatility_probability);
 CREATE INDEX IF NOT EXISTS idx_race_bet_recommendation_date
     ON race_bet_recommendation(race_date);
 CREATE INDEX IF NOT EXISTS idx_race_prediction_similarity
@@ -539,6 +614,27 @@ def init_db(conn: sqlite3.Connection) -> None:
         "comment": "TEXT",
     }.items():
         ensure_column(conn, "race_entry", column, column_type)
+    for column, column_type in {
+        "stddev_value": "REAL NOT NULL DEFAULT 0",
+        "category_count": "INTEGER NOT NULL DEFAULT 0",
+        "importance_value": "REAL NOT NULL DEFAULT 0",
+    }.items():
+        ensure_column(conn, "feature_quality_log", column, column_type)
+    ensure_column(conn, "feature_importance", "feature_category", "TEXT NOT NULL DEFAULT ''")
+    for column, column_type in {
+        "line_score_avg": "REAL NOT NULL DEFAULT 0",
+        "line_top3_std": "REAL NOT NULL DEFAULT 0",
+        "line_winrate_std": "REAL NOT NULL DEFAULT 0",
+        "score_rank_in_line": "INTEGER NOT NULL DEFAULT 0",
+        "top3_rank_in_line": "INTEGER NOT NULL DEFAULT 0",
+        "win_rate_rank_in_line": "INTEGER NOT NULL DEFAULT 0",
+        "line_strength_gap": "REAL NOT NULL DEFAULT 0",
+        "line_strength_ratio": "REAL NOT NULL DEFAULT 0",
+        "line_gap_top": "REAL NOT NULL DEFAULT 0",
+        "line_gap_second": "REAL NOT NULL DEFAULT 0",
+        "line_members": "INTEGER NOT NULL DEFAULT 0",
+    }.items():
+        ensure_column(conn, "race_entry_features", column, column_type)
     for column, column_type in {
         "score_detail_text": "TEXT",
         "score_detail_json": "TEXT",

@@ -3151,6 +3151,12 @@ PREDICTION_TYPE_ORDER = [
     "行動ヒヒーン予想",
 ]
 
+PREDICTION_TYPE_ORDER.extend([
+    "feature_3rentan",
+    "feature_box_3rentan",
+    "feature_line_mix",
+])
+
 PREDICTION_TYPE_SUMMARY = {
     "本命予想": "総合上位",
     "穴予想": "中位上昇",
@@ -3158,6 +3164,13 @@ PREDICTION_TYPE_SUMMARY = {
     "感情ブヒー予想": "人気倒れ回避",
     "行動ヒヒーン予想": "継続安定",
 }
+
+
+PREDICTION_TYPE_SUMMARY.update({
+    "feature_3rentan": "feature_score top3",
+    "feature_box_3rentan": "feature_score top3 box",
+    "feature_line_mix": "feature score + line mix",
+})
 
 
 def prediction_type_order(prediction_type: str) -> int:
@@ -3736,6 +3749,8 @@ def prediction_rows_for_date(conn, target_date: str | None) -> list[dict]:
         return []
     prediction_rows = rows(conn, """
         SELECT p.*, s.venue, s.race_no, s.race_title, s.start_time, s.lineup_text,
+               c.confidence_score, c.confidence_stars, c.expected_value_score,
+               v.volatility_probability,
                (
                  SELECT GROUP_CONCAT(e.car_no, ' ')
                  FROM race_entry e
@@ -3743,6 +3758,8 @@ def prediction_rows_for_date(conn, target_date: str | None) -> list[dict]:
                ) AS entry_car_nos
         FROM race_prediction p
         LEFT JOIN race_schedule s ON s.race_id = p.race_id
+        LEFT JOIN race_confidence c ON c.race_id = p.race_id
+        LEFT JOIN race_volatility_features v ON v.race_id = p.race_id
         WHERE p.race_date = ?
         ORDER BY s.venue, s.race_no, p.prediction_type
     """, (target_date,))
@@ -4071,6 +4088,7 @@ def render_predictions(conn) -> str:
                 "start_time": row.get("start_time"),
                 "prediction": prediction_combo(row),
                 "confidence": f'<span class="pill">{h(row.get("confidence") or "C")}</span>',
+                "race_confidence": f'{h(row.get("confidence_stars") or "-")} {h(decimal(row.get("confidence_score"), 2))}',
                 "score": decimal(row.get("score"), 1),
                 "lineup_text": compact_lineup_text(row.get("lineup_text"), row.get("entry_car_nos")),
                 "reason_text": row.get("reason_text"),
@@ -4078,6 +4096,8 @@ def render_predictions(conn) -> str:
             })
         featured_headers = ["予想タイプ", "レース", "発走", "予想", "信頼度", "スコア", "並び", "根拠"]
         featured_fields = ["prediction_type", "race", "start_time", "prediction", "confidence", "score", "lineup_text", "reason_text"]
+        featured_headers.insert(5, "race confidence")
+        featured_fields.insert(5, "race_confidence")
         if is_dev_environment():
             featured_headers.append("補正内訳")
             featured_fields.append("score_detail_text")
@@ -4644,6 +4664,121 @@ def render_prediction_results(conn) -> str:
         featured_display,
         ["prediction_type", "race", "start_time", "predicted", "actual", "judgment", "hit_1st", "hit_top3_count", "return_amount", "roi"],
     ), "予想ページの注目予想と同じ条件で、各タイプ3件まで答え合わせします。")
+
+    def risk_stats(group_expr: str, where_extra: str = "") -> list[dict]:
+        query = f"""
+            SELECT {group_expr} AS bucket,
+                   COUNT(*) AS predictions,
+                   SUM(r.hit_exact) AS exact_hits,
+                   ROUND(AVG(r.hit_exact) * 100, 1) AS exact_rate,
+                   ROUND(AVG(r.hit_1st) * 100, 1) AS first_rate,
+                   ROUND(AVG(r.hit_top3_count), 2) AS avg_top3_count,
+                   SUM(r.stake_amount) AS stake_total,
+                   SUM(r.return_amount) AS return_total,
+                   ROUND(SUM(r.return_amount) * 100.0 / NULLIF(SUM(r.stake_amount), 0), 1) AS roi
+            FROM race_prediction p
+            JOIN race_prediction_result r ON r.prediction_id = p.id
+            LEFT JOIN race_confidence c ON c.race_id = p.race_id
+            LEFT JOIN race_volatility_features v ON v.race_id = p.race_id
+            WHERE p.prediction_type = 'feature_line_mix'
+              AND COALESCE(p.sample_kind, 'live') = 'live'
+              {where_extra}
+            GROUP BY bucket
+            ORDER BY bucket
+        """
+        return [
+            {
+                "bucket": row["bucket"],
+                "predictions": row["predictions"],
+                "exact_hits": row["exact_hits"] or 0,
+                "exact_rate": pct(row["exact_rate"]),
+                "first_rate": pct(row["first_rate"]),
+                "avg_top3_count": decimal(row["avg_top3_count"], 2),
+                "stake_total": yen(row["stake_total"]),
+                "return_total": yen(row["return_total"]),
+                "roi": pct(row["roi"]),
+            }
+            for row in rows(conn, query)
+        ]
+
+    confidence_distribution_display = [
+        {
+            "bucket": row["bucket"],
+            "races": row["races"],
+            "avg_confidence": decimal(row["avg_confidence"], 3),
+            "avg_expected_value": decimal(row["avg_expected_value"], 3),
+        }
+        for row in rows(conn, """
+            SELECT CASE
+                     WHEN confidence_score >= 0.9 THEN '0.9-1.0'
+                     WHEN confidence_score >= 0.8 THEN '0.8-0.9'
+                     WHEN confidence_score >= 0.7 THEN '0.7-0.8'
+                     WHEN confidence_score >= 0.6 THEN '0.6-0.7'
+                     WHEN confidence_score >= 0.5 THEN '0.5-0.6'
+                     WHEN confidence_score >= 0.4 THEN '0.4-0.5'
+                     WHEN confidence_score >= 0.3 THEN '0.3-0.4'
+                     WHEN confidence_score >= 0.2 THEN '0.2-0.3'
+                     WHEN confidence_score >= 0.1 THEN '0.1-0.2'
+                     ELSE '0.0-0.1'
+                   END AS bucket,
+                   COUNT(*) AS races,
+                   ROUND(AVG(confidence_score), 3) AS avg_confidence,
+                   ROUND(AVG(expected_value_score), 3) AS avg_expected_value
+            FROM race_confidence
+            GROUP BY bucket
+            ORDER BY bucket
+        """)
+    ]
+    confidence_perf = risk_stats("""
+        CASE
+          WHEN c.confidence_score >= 0.9 THEN '0.9-1.0'
+          WHEN c.confidence_score >= 0.8 THEN '0.8-0.9'
+          WHEN c.confidence_score >= 0.7 THEN '0.7-0.8'
+          WHEN c.confidence_score >= 0.6 THEN '0.6-0.7'
+          WHEN c.confidence_score >= 0.5 THEN '0.5-0.6'
+          WHEN c.confidence_score >= 0.4 THEN '0.4-0.5'
+          WHEN c.confidence_score >= 0.3 THEN '0.3-0.4'
+          WHEN c.confidence_score >= 0.2 THEN '0.2-0.3'
+          WHEN c.confidence_score >= 0.1 THEN '0.1-0.2'
+          ELSE '0.0-0.1'
+        END
+    """, "AND c.race_id IS NOT NULL")
+    volatility_perf = risk_stats("""
+        CASE
+          WHEN v.volatility_probability >= 0.7 THEN 'high'
+          WHEN v.volatility_probability >= 0.4 THEN 'middle'
+          ELSE 'low'
+        END
+    """, "AND v.race_id IS NOT NULL")
+    max_line_perf = risk_stats("CAST(c.max_line_members AS TEXT)", "AND c.race_id IS NOT NULL")
+    line_count_perf = risk_stats("CAST(v.line_count AS TEXT)", "AND v.race_id IS NOT NULL")
+    tanki_count_perf = risk_stats("CAST(v.tanki_count AS TEXT)", "AND v.race_id IS NOT NULL")
+    expected_value_perf = risk_stats("""
+        CASE
+          WHEN c.expected_value_score >= 0.8 THEN '0.8-1.0'
+          WHEN c.expected_value_score >= 0.6 THEN '0.6-0.8'
+          WHEN c.expected_value_score >= 0.4 THEN '0.4-0.6'
+          WHEN c.expected_value_score >= 0.2 THEN '0.2-0.4'
+          ELSE '0.0-0.2'
+        END
+    """, "AND c.race_id IS NOT NULL")
+    risk_headers = ["区分", "予想数", "完全的中", "完全的中率", "1着率", "3着内平均", "投資", "払戻", "回収率"]
+    risk_fields = ["bucket", "predictions", "exact_hits", "exact_rate", "first_rate", "avg_top3_count", "stake_total", "return_total", "roi"]
+    body += section("feature_line_mix 回収率改善分析", f"""
+      <div class="grid two">
+        {section("confidence_score分布", table(
+            ["区分", "レース数", "平均confidence", "平均期待値"],
+            confidence_distribution_display,
+            ["bucket", "races", "avg_confidence", "avg_expected_value"],
+        ))}
+        {section("confidence別成績", table(risk_headers, confidence_perf, risk_fields))}
+        {section("荒れる確率別成績", table(risk_headers, volatility_perf, risk_fields))}
+        {section("ライン人数別成績", table(risk_headers, max_line_perf, risk_fields))}
+        {section("分線数別成績", table(risk_headers, line_count_perf, risk_fields))}
+        {section("単騎数別成績", table(risk_headers, tanki_count_perf, risk_fields))}
+        {section("期待値スコア別成績", table(risk_headers, expected_value_perf, risk_fields))}
+      </div>
+    """, "feature_line_mixを買う/見送る条件を確認するための分析です。予想ロジック自体は変更せず、confidence・荒れ度・ライン構成ごとの回収率を比較します。")
 
     result_dates = sorted(
         {row.get("race_date") for row in all_result_rows if row.get("race_date")},

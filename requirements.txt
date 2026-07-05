@@ -1,3 +1,4 @@
 beautifulsoup4==4.12.3
+lightgbm==4.5.0
 playwright==1.44.0
 requests==2.32.3

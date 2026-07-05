@@ -25,6 +25,9 @@ jobs:
       - name: Build entry features
         run: python -m src.entry_features
 
+      - name: Build race risk features
+        run: python -m src.race_risk_features
+
       - name: Evaluate predictions
         env:
           SITE_ENV: ${{ vars.SITE_ENV }}

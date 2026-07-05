@@ -17,9 +17,12 @@ LINE_STRENGTH_MEMBER_WEIGHT = 2.5
 FEATURE_COLUMNS = [
     "line_member_count",
     "line_average_score",
+    "line_score_avg",
     "line_max_score",
     "line_min_score",
     "line_score_std",
+    "line_top3_std",
+    "line_winrate_std",
     "line_average_win_rate",
     "line_average_top3_rate",
     "line_average_age",
@@ -36,6 +39,9 @@ FEATURE_COLUMNS = [
     "line_total_h",
     "line_total_s",
     "line_score_rank",
+    "score_rank_in_line",
+    "top3_rank_in_line",
+    "win_rate_rank_in_line",
     "line_win_rate_rank",
     "line_bs_rank",
     "line_age_rank",
@@ -91,6 +97,11 @@ FEATURE_COLUMNS = [
     "score_105plus",
     "line_strength",
     "line_strength_rank",
+    "line_strength_gap",
+    "line_strength_ratio",
+    "line_gap_top",
+    "line_gap_second",
+    "line_members",
     "is_single_line",
     "is_two_man_line",
     "is_three_man_line",
@@ -238,9 +249,12 @@ def stats_for_line(members: list[dict]) -> dict:
     line_stats = {
         "line_member_count": len(members),
         "line_average_score": average(scores),
+        "line_score_avg": average(scores),
         "line_max_score": max(scores) if scores else 0.0,
         "line_min_score": min(scores) if scores else 0.0,
         "line_score_std": stddev(scores),
+        "line_top3_std": stddev(top3_rates),
+        "line_winrate_std": stddev(win_rates),
         "line_average_win_rate": average(win_rates),
         "line_average_top3_rate": average(top3_rates),
         "line_average_age": average(ages),
@@ -328,6 +342,8 @@ def build_features_for_race(conn, race: dict, entries: list[dict], result_by_car
             start=1,
         )
     }
+    line_strength_values = sorted((stats["line_strength"] for stats in line_stats_by_no.values()), reverse=True)
+    top_line_strength = line_strength_values[0] if line_strength_values else 0.0
 
     features = []
     for entry in entries:
@@ -338,6 +354,7 @@ def build_features_for_race(conn, race: dict, entries: list[dict], result_by_car
         line_ranks = {
             "score": rank_map(members, "score"),
             "win_rate": rank_map(members, "win_rate"),
+            "top3": rank_map(members, "trifecta_rate"),
             "bs": rank_map(members, "back_count"),
             "age": rank_map(members, "age", descending=False),
             "escape": rank_map(members, "escape_count"),
@@ -350,6 +367,9 @@ def build_features_for_race(conn, race: dict, entries: list[dict], result_by_car
         line_position = int(pos_by_car.get(car_no, 0))
         is_second = 1 if line_position == 2 else 0
         line_member_count = int(line_stats["line_member_count"])
+        line_scores = sorted([value(row, "score") for row in members], reverse=True)
+        line_top_score = line_scores[0] if line_scores else value(entry, "score")
+        line_second_score = line_scores[1] if len(line_scores) > 1 else line_top_score
         style = dominant_style(entry)
         rank = int((result_by_car.get(car_no) or {}).get("rank") or 0)
         row = {
@@ -364,6 +384,9 @@ def build_features_for_race(conn, race: dict, entries: list[dict], result_by_car
             "line_no": line_no,
             **line_stats,
             "line_score_rank": line_ranks["score"].get(car_no, 0),
+            "score_rank_in_line": line_ranks["score"].get(car_no, 0),
+            "top3_rank_in_line": line_ranks["top3"].get(car_no, 0),
+            "win_rate_rank_in_line": line_ranks["win_rate"].get(car_no, 0),
             "line_win_rate_rank": line_ranks["win_rate"].get(car_no, 0),
             "line_bs_rank": line_ranks["bs"].get(car_no, 0),
             "line_age_rank": line_ranks["age"].get(car_no, 0),
@@ -412,6 +435,11 @@ def build_features_for_race(conn, race: dict, entries: list[dict], result_by_car
             **age_flags(value(entry, "age")),
             **score_flags(value(entry, "score")),
             "line_strength_rank": line_strength_ranks.get(line_no, 0),
+            "line_strength_gap": top_line_strength - line_stats["line_strength"],
+            "line_strength_ratio": line_stats["line_strength"] / top_line_strength if top_line_strength else 0,
+            "line_gap_top": line_top_score - value(entry, "score"),
+            "line_gap_second": line_second_score - value(entry, "score"),
+            "line_members": line_member_count,
             "is_single_line": 1 if line_member_count == 1 else 0,
             "is_two_man_line": 1 if line_member_count == 2 else 0,
             "is_three_man_line": 1 if line_member_count == 3 else 0,
@@ -456,12 +484,16 @@ def write_quality_log(conn, table_name: str = "race_entry_features") -> list[dic
                 SUM(CASE WHEN {column} IS NULL THEN 1 ELSE 0 END) AS null_count,
                 MIN({column}) AS min_value,
                 MAX({column}) AS max_value,
-                AVG({column}) AS avg_value
+                AVG({column}) AS avg_value,
+                AVG({column} * {column}) AS avg_square,
+                COUNT(DISTINCT {column}) AS category_count
             FROM {table_name}
             """
         ).fetchone()
         row_count = int(row["row_count"] or 0)
         null_count = int(row["null_count"] or 0)
+        avg_value = float(row["avg_value"] or 0)
+        avg_square = float(row["avg_square"] or 0)
         summary = {
             "table_name": table_name,
             "feature_name": column,
@@ -469,7 +501,10 @@ def write_quality_log(conn, table_name: str = "race_entry_features") -> list[dic
             "null_count": null_count,
             "min_value": float(row["min_value"] or 0),
             "max_value": float(row["max_value"] or 0),
-            "avg_value": float(row["avg_value"] or 0),
+            "avg_value": avg_value,
+            "stddev_value": math.sqrt(max(0.0, avg_square - avg_value * avg_value)),
+            "category_count": int(row["category_count"] or 0),
+            "importance_value": 0.0,
             "missing_rate": round(null_count * 100 / row_count, 6) if row_count else 0.0,
             "created_at": now,
         }
@@ -487,8 +522,12 @@ def write_quality_log(conn, table_name: str = "race_entry_features") -> list[dic
     conn.executemany(
         """
         INSERT INTO feature_quality_log
-            (table_name, feature_name, row_count, null_count, min_value, max_value, avg_value, missing_rate, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (
+                table_name, feature_name, row_count, null_count,
+                min_value, max_value, avg_value, stddev_value,
+                category_count, importance_value, missing_rate, created_at
+            )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
@@ -499,6 +538,9 @@ def write_quality_log(conn, table_name: str = "race_entry_features") -> list[dic
                 row["min_value"],
                 row["max_value"],
                 row["avg_value"],
+                row["stddev_value"],
+                row["category_count"],
+                row["importance_value"],
                 row["missing_rate"],
                 row["created_at"],
             )
