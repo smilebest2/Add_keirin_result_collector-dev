@@ -3,5 +3,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 logs/
+data/keirin.db
 data/keirin_archive.db
 data/keirin_archive_ready.db

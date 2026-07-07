@@ -5,6 +5,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   analyze:
@@ -18,6 +19,17 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Restore DB backup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id="$(gh run list --workflow "Collect Keirin Results" --branch main --status success --json databaseId --jq '.[0].databaseId' || true)"
+          if [ -n "$run_id" ]; then
+            mkdir -p data
+            gh run download "$run_id" --name keirin-db-backup --dir data || true
+          fi
+          test -f data/keirin.db || echo "No DB artifact restored; using repository DB if present."
 
       - name: Build line features
         run: python -m src.lineup_features
@@ -38,8 +50,19 @@ jobs:
           SITE_ENV: ${{ vars.SITE_ENV }}
         run: python -m src.analysis
 
+      - name: Export public data
+        run: python -m src.export_public_data
+
       - name: Commit analytics pages
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "Update keirin analytics pages"
-          file_pattern: data/keirin.db docs/*.html docs/.nojekyll
+          file_pattern: docs/*.html docs/.nojekyll docs/data/*.json docs/data/race_details/*.json
+
+      - name: Upload DB backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: keirin-db-backup
+          path: data/keirin.db
+          retention-days: 3
+          if-no-files-found: error
