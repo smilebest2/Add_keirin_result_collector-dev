@@ -1,6 +1,8 @@
 import unittest
+import types
+from unittest.mock import patch
 
-from src.race_risk_features import build_for_race
+from src.race_risk_features import apply_lightgbm_volatility, build_for_race
 
 
 class RaceRiskFeaturesTest(unittest.TestCase):
@@ -73,6 +75,38 @@ class RaceRiskFeaturesTest(unittest.TestCase):
         self.assertGreaterEqual(volatility["volatility_probability"], 0)
         self.assertLessEqual(volatility["volatility_probability"], 1)
         self.assertEqual(volatility["high_payout"], 1)
+
+    def test_lightgbm_failure_falls_back_without_raising(self):
+        class BrokenClassifier:
+            def __init__(self, **_kwargs):
+                raise RuntimeError("missing optional dependency")
+
+        records = [
+            {
+                "trifecta_payout": 1000 + index,
+                "high_payout": index % 2,
+                "line_member_variance": 0.1,
+                "line_strength_gap": 1.0,
+                "score_minus_race_avg_variance": 2.0,
+                "win_rate_variance": 3.0,
+                "class_variance": 0.0,
+                "age_variance": 4.0,
+                "leader_score_gap": 1.0,
+                "second_score_gap": 0.5,
+                "tanki_count": 1,
+                "line_count": 3,
+            }
+            for index in range(100)
+        ]
+
+        def fake_import(name, globals_=None, locals_=None, fromlist=(), level=0):
+            if name == "lightgbm":
+                return types.SimpleNamespace(LGBMClassifier=BrokenClassifier)
+            return original_import(name, globals_, locals_, fromlist, level)
+
+        original_import = __import__
+        with patch("builtins.__import__", fake_import):
+            self.assertFalse(apply_lightgbm_volatility(records))
 
 
 if __name__ == "__main__":

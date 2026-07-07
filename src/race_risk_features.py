@@ -334,24 +334,30 @@ def apply_lightgbm_volatility(records: list[dict]) -> bool:
     train_rows = [row for row in records if int(row.get("trifecta_payout") or 0) > 0]
     labels = [int(row["high_payout"]) for row in train_rows]
     if len(train_rows) < 80 or len(set(labels)) < 2:
+        logging.info("skip LightGBM volatility: insufficient training rows or label variety")
         return False
     try:
         from lightgbm import LGBMClassifier
-    except Exception:
+    except Exception as exc:
+        logging.warning("skip LightGBM volatility: lightgbm is unavailable: %s", exc)
         return False
-    model = LGBMClassifier(
-        n_estimators=80,
-        max_depth=3,
-        learning_rate=0.06,
-        num_leaves=7,
-        min_child_samples=20,
-        random_state=42,
-        verbose=-1,
-    )
-    x_train = [[float(row.get(feature) or 0) for feature in VOLATILITY_MODEL_FEATURES] for row in train_rows]
-    model.fit(x_train, labels)
-    x_all = [[float(row.get(feature) or 0) for feature in VOLATILITY_MODEL_FEATURES] for row in records]
-    probabilities = model.predict_proba(x_all)
+    try:
+        model = LGBMClassifier(
+            n_estimators=80,
+            max_depth=3,
+            learning_rate=0.06,
+            num_leaves=7,
+            min_child_samples=20,
+            random_state=42,
+            verbose=-1,
+        )
+        x_train = [[float(row.get(feature) or 0) for feature in VOLATILITY_MODEL_FEATURES] for row in train_rows]
+        model.fit(x_train, labels)
+        x_all = [[float(row.get(feature) or 0) for feature in VOLATILITY_MODEL_FEATURES] for row in records]
+        probabilities = model.predict_proba(x_all)
+    except Exception as exc:
+        logging.warning("skip LightGBM volatility: training failed, fallback to heuristic: %s", exc)
+        return False
     for row, probability in zip(records, probabilities):
         score = float(probability[1])
         row["volatility_probability"] = score
@@ -841,7 +847,12 @@ def log_risk_report(report: dict) -> None:
     logging.info("comparison %s", report.get("comparison"))
 
 
-def build_race_risk_features(conn, start_date: str | None = None, end_date: str | None = None) -> dict:
+def build_race_risk_features(
+    conn,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    use_lightgbm: bool = False,
+) -> dict:
     init_db(conn)
     filters = []
     params = []
@@ -913,7 +924,11 @@ def build_race_risk_features(conn, start_date: str | None = None, end_date: str 
         conn.execute("DELETE FROM race_volatility_features")
     now = datetime.now(JST).isoformat(timespec="seconds")
     save_confidence(conn, confidence_records, now)
-    used_lightgbm = apply_lightgbm_volatility(volatility_records)
+    if use_lightgbm:
+        used_lightgbm = apply_lightgbm_volatility(volatility_records)
+    else:
+        used_lightgbm = False
+        logging.info("skip LightGBM volatility: use --use-lightgbm to enable training")
     save_volatility(conn, volatility_records, now)
     confidence_quality = save_quality(conn, "race_confidence", CONFIDENCE_COLUMNS)
     volatility_quality = save_quality(conn, "race_volatility_features", VOLATILITY_COLUMNS)
@@ -955,6 +970,7 @@ def build_race_risk_features(conn, start_date: str | None = None, end_date: str 
         "payout_threshold": int(threshold),
         "quality_features": confidence_quality + volatility_quality,
         "model_name": LIGHTGBM_MODEL_NAME if used_lightgbm else MODEL_NAME,
+        "use_lightgbm": use_lightgbm,
         "normalization_method": NORMALIZATION_METHOD,
         "selected_temperature": selected_temperature,
         "confidence_before": before_confidence,
@@ -965,18 +981,19 @@ def build_race_risk_features(conn, start_date: str | None = None, end_date: str 
     }
 
 
-def run(start_date: str | None = None, end_date: str | None = None) -> dict:
+def run(start_date: str | None = None, end_date: str | None = None, use_lightgbm: bool = False) -> dict:
     setup_logging()
     with connect() as conn:
-        return build_race_risk_features(conn, start_date=start_date, end_date=end_date)
+        return build_race_risk_features(conn, start_date=start_date, end_date=end_date, use_lightgbm=use_lightgbm)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build race confidence and volatility features")
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
+    parser.add_argument("--use-lightgbm", action="store_true", help="Train LightGBM volatility model. Daily collection should omit this.")
     args = parser.parse_args()
-    print(run(start_date=args.start_date, end_date=args.end_date))
+    print(run(start_date=args.start_date, end_date=args.end_date, use_lightgbm=args.use_lightgbm))
 
 
 if __name__ == "__main__":
