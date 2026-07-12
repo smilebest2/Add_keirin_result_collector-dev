@@ -24,8 +24,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          echo "DB_RESTORE_STATUS=missing" >> "$GITHUB_ENV"
+          echo "DB_RESTORE_RUN_ID=" >> "$GITHUB_ENV"
           run_id="$(gh run list --workflow "Collect Keirin Results" --branch main --status success --json databaseId --jq '.[0].databaseId' || true)"
           if [ -n "$run_id" ]; then
+            echo "DB_RESTORE_RUN_ID=$run_id" >> "$GITHUB_ENV"
             mkdir -p data
             restore_dir="data/.restore-db"
             rm -rf "$restore_dir"
@@ -33,15 +36,21 @@ jobs:
             if gh run download "$run_id" --name keirin-db-backup --dir "$restore_dir"; then
               if [ -f "$restore_dir/keirin.db" ]; then
                 mv "$restore_dir/keirin.db" data/keirin.db
+                echo "DB_RESTORE_STATUS=restored" >> "$GITHUB_ENV"
               else
                 echo "DB artifact downloaded but keirin.db was not found."
+                echo "DB_RESTORE_STATUS=downloaded_without_db" >> "$GITHUB_ENV"
               fi
             else
               echo "DB artifact download failed; using repository DB if present."
+              echo "DB_RESTORE_STATUS=download_failed" >> "$GITHUB_ENV"
             fi
             rm -rf "$restore_dir"
           fi
           test -f data/keirin.db || echo "No DB artifact restored; using repository DB if present."
+
+      - name: Summarize DB before analysis
+        run: python -m src.db_guard summary --json-file db-guard-before.json
 
       - name: Build line features
         run: python -m src.lineup_features
@@ -65,16 +74,48 @@ jobs:
       - name: Export public data
         run: python -m src.export_public_data
 
+      - name: Validate DB backup continuity
+        run: |
+          python -m src.db_guard summary --json-file db-guard-after.json
+          python -m src.db_guard validate \
+            --before db-guard-before.json \
+            --after db-guard-after.json \
+            --restore-status "$DB_RESTORE_STATUS" \
+            --json-file db-guard-validation.json \
+            --env-file "$GITHUB_ENV" \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
       - name: Commit analytics pages
+        if: env.DB_GUARD_OK == 'true'
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "Update keirin analytics pages"
           file_pattern: docs/*.html docs/.nojekyll docs/data/*.json docs/data/race_details/*.json
 
       - name: Upload DB backup
+        if: env.DB_GUARD_OK == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: keirin-db-backup
           path: data/keirin.db
           retention-days: 3
           if-no-files-found: error
+
+      - name: Upload DB guard diagnostics
+        if: env.DB_GUARD_OK != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: keirin-db-guard-diagnostics
+          path: |
+            db-guard-before.json
+            db-guard-after.json
+            db-guard-validation.json
+            logs/*.log
+          retention-days: 3
+          if-no-files-found: warn
+
+      - name: Fail when DB backup is not safe to publish
+        if: env.DB_GUARD_OK != 'true'
+        run: |
+          echo "DB guard blocked publishing keirin-db-backup. See job summary and diagnostics artifact."
+          exit 1
