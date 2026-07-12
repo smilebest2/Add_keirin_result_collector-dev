@@ -27,7 +27,19 @@ jobs:
           run_id="$(gh run list --workflow "Collect Keirin Results" --branch main --status success --json databaseId --jq '.[0].databaseId' || true)"
           if [ -n "$run_id" ]; then
             mkdir -p data
-            gh run download "$run_id" --name keirin-db-backup --dir data || true
+            restore_dir="data/.restore-db"
+            rm -rf "$restore_dir"
+            mkdir -p "$restore_dir"
+            if gh run download "$run_id" --name keirin-db-backup --dir "$restore_dir"; then
+              if [ -f "$restore_dir/keirin.db" ]; then
+                mv "$restore_dir/keirin.db" data/keirin.db
+              else
+                echo "DB artifact downloaded but keirin.db was not found."
+              fi
+            else
+              echo "DB artifact download failed; using repository DB if present."
+            fi
+            rm -rf "$restore_dir"
           fi
           test -f data/keirin.db || echo "No DB artifact restored; using repository DB if present."
 

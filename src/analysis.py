@@ -4427,6 +4427,104 @@ def render_prediction_results(conn) -> str:
       <div class="card"><span>集計日時</span><strong>{h(latest_checked or "-")}</strong></div>
     </div>
     """
+    body += """
+    <section>
+      <h2>データ更新状況</h2>
+      <p class="section-lead">公開JSONから、日次取得・予想生成・予想結果評価の進み具合を確認します。</p>
+      <div class="grid" id="prediction-result-freshness">
+        <div class="card"><span>生成日時</span><strong>-</strong></div>
+        <div class="card"><span>最新結果日</span><strong>-</strong></div>
+        <div class="card"><span>最新予想日</span><strong>-</strong></div>
+        <div class="card"><span>最新評価日</span><strong>-</strong></div>
+        <div class="card"><span>未評価予想</span><strong>-</strong></div>
+        <div class="card"><span>予想なし結果</span><strong>-</strong></div>
+      </div>
+      <div class="inline-note" id="prediction-result-freshness-note">更新状況を読み込んでいます。</div>
+      <div id="prediction-result-daily-counts"></div>
+    </section>
+    <script>
+    (() => {
+      const freshness = document.getElementById("prediction-result-freshness");
+      const note = document.getElementById("prediction-result-freshness-note");
+      const daily = document.getElementById("prediction-result-daily-counts");
+      if (!freshness || !note || !daily) return;
+
+      const safe = (value) => value === undefined || value === null || value === "" ? "-" : String(value);
+      const number = (value) => Number(value || 0).toLocaleString("ja-JP");
+      const setCards = (summary) => {
+        const items = [
+          ["生成日時", summary.generated_at],
+          ["最新結果日", summary.latest_result_date],
+          ["最新予想日", summary.latest_prediction_date],
+          ["最新評価日", summary.latest_prediction_result_date],
+          ["未評価予想", number(summary.unevaluated_prediction_count)],
+          ["予想なし結果", number(summary.result_races_without_predictions)]
+        ];
+        freshness.innerHTML = items.map(([label, value]) => (
+          `<div class="card"><span>${label}</span><strong>${safe(value)}</strong></div>`
+        )).join("");
+      };
+      const renderDaily = (rows) => {
+        const latest = rows.slice(0, 10);
+        daily.innerHTML = `
+          <table>
+            <thead>
+              <tr>
+                <th>日付</th>
+                <th>番組</th>
+                <th>結果</th>
+                <th>予想</th>
+                <th>評価済み</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${latest.map((row) => `
+                <tr>
+                  <td>${safe(row.race_date)}</td>
+                  <td>${number(row.scheduled_races)}</td>
+                  <td>${number(row.result_races)}</td>
+                  <td>${number(row.predictions)}</td>
+                  <td>${number(row.prediction_results)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        `;
+      };
+      const statusMessage = (summary) => {
+        const resultDate = summary.latest_result_date || "";
+        const evaluatedDate = summary.latest_prediction_result_date || "";
+        const predictionDate = summary.latest_prediction_date || "";
+        const unevaluated = Number(summary.unevaluated_prediction_count || 0);
+        const missingPredictions = Number(summary.result_races_without_predictions || 0);
+        const messages = [];
+        if (resultDate && evaluatedDate && resultDate > evaluatedDate) {
+          messages.push(`結果は ${resultDate} までありますが、予想結果評価は ${evaluatedDate} までです。`);
+        }
+        if (predictionDate && resultDate && predictionDate > resultDate) {
+          messages.push(`予想は ${predictionDate} まで作成済みです。結果反映後に評価されます。`);
+        }
+        if (unevaluated > 0) {
+          messages.push(`未評価予想が ${number(unevaluated)} 件あります。`);
+        }
+        if (missingPredictions > 0) {
+          messages.push(`結果はあるが予想がないレースが ${number(missingPredictions)} 件あります。`);
+        }
+        return messages.length ? messages.join(" ") : "日次取得、予想生成、予想結果評価は同期しています。";
+      };
+      Promise.all([
+        fetch("data/public_summary.json", { cache: "no-store" }).then((response) => response.json()),
+        fetch("data/daily_counts.json", { cache: "no-store" }).then((response) => response.json())
+      ]).then(([summary, counts]) => {
+        setCards(summary);
+        renderDaily(Array.isArray(counts) ? counts : []);
+        note.textContent = statusMessage(summary);
+      }).catch(() => {
+        note.textContent = "更新状況JSONを読み込めませんでした。";
+      });
+    })();
+    </script>
+    """
 
     def format_stats(items: list[dict]) -> list[dict]:
         formatted = []

@@ -119,7 +119,7 @@ class DeadHeatHandlingTest(unittest.TestCase):
         self.assertEqual(evaluated["hit_exact"], 0)
         self.assertEqual(evaluated["hit_1st"], 0)
         self.assertEqual(evaluated["return_amount"], 0)
-        self.assertIsNone(evaluated["payout"])
+        self.assertEqual(evaluated["payout"], 0)
 
 
 if __name__ == "__main__":

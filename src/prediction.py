@@ -1564,7 +1564,7 @@ def evaluate_predictions(conn) -> int:
                 1 if predicted[0] in rank_candidates[1] else 0,
                 1 if set(predicted[:2]).issubset(top2_candidates) else 0,
                 len(set(predicted) & official_top3),
-                payout,
+                payout or 0,
                 stake,
                 return_amount,
                 roi,

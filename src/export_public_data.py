@@ -198,10 +198,28 @@ def export_public_data(output_dir: Path = DOCS_DATA_DIR, recent_days: int = 30) 
             "latest_schedule_date": scalar(conn, "SELECT MAX(race_date) FROM race_schedule"),
             "latest_result_date": scalar(conn, "SELECT MAX(race_date) FROM race_master"),
             "latest_prediction_date": scalar(conn, "SELECT MAX(race_date) FROM race_prediction"),
+            "latest_prediction_result_date": scalar(conn, """
+                SELECT MAX(p.race_date)
+                FROM race_prediction p
+                JOIN race_prediction_result r ON r.prediction_id = p.id
+            """),
+            "latest_prediction_result_checked_at": scalar(conn, "SELECT MAX(checked_at) FROM race_prediction_result"),
             "race_schedule_count": scalar(conn, "SELECT COUNT(*) FROM race_schedule") or 0,
             "race_result_count": scalar(conn, "SELECT COUNT(*) FROM race_master") or 0,
             "prediction_count": scalar(conn, "SELECT COUNT(*) FROM race_prediction") or 0,
             "prediction_result_count": scalar(conn, "SELECT COUNT(*) FROM race_prediction_result") or 0,
+            "unevaluated_prediction_count": scalar(conn, """
+                SELECT COUNT(*)
+                FROM race_prediction p
+                LEFT JOIN race_prediction_result r ON r.prediction_id = p.id
+                WHERE r.id IS NULL
+            """) or 0,
+            "result_races_without_predictions": scalar(conn, """
+                SELECT COUNT(DISTINCT m.race_id)
+                FROM race_master m
+                LEFT JOIN race_prediction p ON p.race_id = m.race_id
+                WHERE p.id IS NULL
+            """) or 0,
         }
         payloads = {
             "public_summary.json": summary,
