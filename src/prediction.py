@@ -14,7 +14,10 @@ TRIFECTA = "3連単"
 STAKE_AMOUNT = 100
 MODEL_VERSION = "explainable-v6"
 BET_TYPES = ["2車複", "2車単", "ワイド", "3連複", "3連単"]
-RECOMMENDATION_MODEL_VERSION = "bet-fit-v3"
+RECOMMENDATION_MODEL_VERSION = "bet-fit-v4"
+SIMILAR_SAMPLE_MIN = 10
+SIMILAR_ROI_SAMPLE_MIN = 30
+SIMILAR_ROI_FLOOR = 70.0
 
 PREDICTION_TYPES = [
     "本命予想",
@@ -780,6 +783,38 @@ def bet_combinations(predicted: list[int], prediction_type: str | None = None) -
     }
 
 
+def feature_line_mix_operational_score(row: dict) -> float:
+    feature = row.get("entry_feature") or {}
+    return (
+        metric(row, "feature_score") * 2.2
+        + metric(row, "top3_score") * 0.06
+        + metric(row, "base_score") * 0.03
+        + safe_float(feature.get("is_second")) * 8.0
+        + safe_float(feature.get("line_strength")) * 0.025
+        + safe_float(feature.get("leader_second_win_gap")) * 0.12
+        - safe_float(feature.get("line_strength_rank")) * 1.8
+        - safe_float(feature.get("race_score_rank")) * 0.6
+    )
+
+
+def recommendation_scored(scored: list[dict]) -> tuple[list[dict], str]:
+    feature_rows = [row for row in scored if row.get("feature_available")]
+    if len(feature_rows) >= 3:
+        return (
+            [
+                {
+                    **row,
+                    "base_score": round(feature_line_mix_operational_score(row), 3),
+                    "recommendation_original_base_score": row.get("base_score"),
+                    "recommendation_source": TYPE_FEATURE_LINE_MIX,
+                }
+                for row in scored
+            ],
+            TYPE_FEATURE_LINE_MIX,
+        )
+    return ([{**row, "recommendation_source": "base_score"} for row in scored], "base_score")
+
+
 def lineup_context(conn, race_id: str, axis_car_no: int) -> dict:
     lineup = rows(
         conn,
@@ -832,6 +867,7 @@ def similar_bet_stats(
     target_date: str,
     field_size: int,
     prediction_score: float,
+    prediction_type: str = TYPE_FEATURE_LINE_MIX,
 ) -> dict[str, dict]:
     historical = rows(
         conn,
@@ -853,7 +889,7 @@ def similar_bet_stats(
               ) = ?
           AND p.score BETWEEN ? AND ?
         """,
-        (TYPE_HONMEI, target_date, field_size, prediction_score - 60, prediction_score + 60),
+        (prediction_type, target_date, field_size, prediction_score - 60, prediction_score + 60),
     )
     race_class = race.get("race_class") or ""
     same_class = [
@@ -1069,14 +1105,14 @@ def classify_bet_fit(
         "ワイド": 24,
     }
     for bet_type, stats in similar_stats.items():
-        if stats.get("sample_count", 0) >= 30:
+        if stats.get("sample_count", 0) >= SIMILAR_ROI_SAMPLE_MIN:
             suitability[bet_type] += min(float(stats.get("hit_rate") or 0), 40) * 0.15
             if stats.get("roi") is not None:
-                suitability[bet_type] += max(min((stats["roi"] - 70) / 10, 3), -3)
+                suitability[bet_type] += max(min((stats["roi"] - SIMILAR_ROI_FLOOR) / 10, 3), -3)
 
     structural_fit = {
         "3連単": (
-            chaos != "high"
+            chaos == "low"
             and prediction_score < 300
             and gap12 >= 13.5
             and gap23 >= 4.5
@@ -1136,12 +1172,14 @@ def classify_bet_fit(
             },
         }
 
-    bet_type = eligible[0]
+    bet_type = max(eligible, key=lambda item: suitability[item])
     similar = similar_stats.get(
         bet_type,
         {"sample_count": 0, "hit_rate": None, "roi": None},
     )
-    if int(similar.get("sample_count") or 0) < 10:
+    similar_sample_count = int(similar.get("sample_count") or 0)
+    similar_roi = similar.get("roi")
+    if similar_sample_count < SIMILAR_SAMPLE_MIN:
         return {
             "bet_type": "見送り",
             "combinations": [],
@@ -1172,6 +1210,43 @@ def classify_bet_fit(
                 **line_info,
             },
         }
+    if (
+        similar_sample_count >= SIMILAR_ROI_SAMPLE_MIN
+        and similar_roi is not None
+        and float(similar_roi) < SIMILAR_ROI_FLOOR
+    ):
+        return {
+            "bet_type": "見送り",
+            "combinations": [],
+            "confidence": "C",
+            "score": suitability[bet_type],
+            "reason": "",
+            "skip_reason": f"類似レースの回収率が低い（{float(similar_roi):.1f}%）",
+            "similar": similar,
+            "features": {
+                "field_size": len(ranked),
+                "gap12": gap12,
+                "gap23": gap23,
+                "gap34": gap34,
+                "gap13": gap13,
+                "avg_top2": avg_top2,
+                "avg_top3": avg_top3,
+                "avg_recent_top3": avg_recent_top3,
+                "avg_competition_score": avg_competition_score,
+                "min_starts": min_starts,
+                "min_recent_starts": min_recent_starts,
+                "model_top3_stability": model_top3_stability,
+                "prediction_score": prediction_score,
+                "chaos_score": chaos_score,
+                "chaos_level": chaos,
+                "chaos_reasons": chaos_reasons,
+                "suitability": suitability,
+                "structural_fit": structural_fit,
+                "operational_filter": "similar_roi_below_floor",
+                "operational_roi_floor": SIMILAR_ROI_FLOOR,
+                **line_info,
+            },
+        }
     combinations = {
         "3連単": [f"{cars[0]}-{cars[1]}-{cars[2]}"],
         "3連複": ["=".join(map(str, sorted(cars[:3])))],
@@ -1188,7 +1263,7 @@ def classify_bet_fit(
     confidence_value = suitability[bet_type] - chaos_score * 0.2
     if not line_info.get("available"):
         confidence_value -= 5
-    if similar.get("sample_count", 0) < 30:
+    if similar.get("sample_count", 0) < SIMILAR_ROI_SAMPLE_MIN:
         confidence_value -= 4
     confidence_label = "A" if chaos == "low" and confidence_value >= 45 and margin >= 6 else "B" if chaos != "high" and confidence_value >= 30 else "C"
     similar_text = (
@@ -1247,7 +1322,8 @@ def save_bet_recommendations(
         scored = scored_by_race.get(race["race_id"], [])
         if len(scored) < 3:
             continue
-        base_ranked = sorted(scored, key=lambda row: row["base_score"], reverse=True)
+        operational_scored, recommendation_source = recommendation_scored(scored)
+        base_ranked = sorted(operational_scored, key=lambda row: row["base_score"], reverse=True)
         prediction_score = sum(float(row["base_score"]) for row in base_ranked[:3])
         line_info = lineup_context(conn, race["race_id"], int(base_ranked[0]["car_no"]))
         similar_stats = similar_bet_stats(
@@ -1256,9 +1332,15 @@ def save_bet_recommendations(
             target_date,
             len(scored),
             prediction_score,
+            recommendation_source if recommendation_source != "base_score" else TYPE_HONMEI,
         )
-        recommendation = classify_bet_fit(scored, line_info, similar_stats)
+        recommendation = classify_bet_fit(operational_scored, line_info, similar_stats)
         similar = recommendation["similar"]
+        recommendation_features = {
+            **recommendation["features"],
+            "recommendation_source": recommendation_source,
+            "recommendation_model_version": RECOMMENDATION_MODEL_VERSION,
+        }
         conn.execute(
             """
             INSERT OR REPLACE INTO race_bet_recommendation
@@ -1283,7 +1365,7 @@ def save_bet_recommendations(
                 int(similar.get("sample_count") or 0),
                 similar.get("hit_rate"),
                 similar.get("roi"),
-                json.dumps(recommendation["features"], ensure_ascii=False),
+                json.dumps(recommendation_features, ensure_ascii=False),
                 RECOMMENDATION_MODEL_VERSION,
                 datetime.now().isoformat(timespec="seconds"),
             ),

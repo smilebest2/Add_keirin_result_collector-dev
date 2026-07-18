@@ -3897,10 +3897,31 @@ def compact_components_html(value: str | None, visible_count: int = 3) -> str:
     return f'<details class="compact-components"><summary>{h(short)}</summary><div>{h(text)}</div></details>'
 
 
+def is_operational_buy(row: dict, features: dict) -> bool:
+    bet_type = row.get("recommended_bet_type") or ""
+    confidence = row.get("confidence") or "C"
+    chaos = features.get("chaos_level") or ""
+    source = features.get("recommendation_source") or ""
+    sample_count = int(row.get("similar_sample_count") or 0)
+    similar_roi = to_float(row.get("similar_roi"))
+    return (
+        bet_type
+        and not row.get("skip_reason")
+        and source == "feature_line_mix"
+        and confidence in {"A", "B"}
+        and chaos != "high"
+        and sample_count >= 30
+        and similar_roi is not None
+        and similar_roi >= 70
+    )
+
+
 def recommendation_decision(row: dict, features: dict) -> tuple[str, str]:
     bet_type = row.get("recommended_bet_type") or "見送り"
     confidence = row.get("confidence") or "C"
     chaos = features.get("chaos_level") or ""
+    if not is_operational_buy(row, features):
+        confidence = "C"
     if bet_type != "見送り" and confidence in {"A", "B"} and chaos != "high":
         return "buy", "買い候補"
     if bet_type != "見送り":
@@ -4395,6 +4416,71 @@ def render_prediction_results(conn) -> str:
         row for row in all_result_rows
         if (row.get("sample_kind") or "live") == "live"
     ]
+    recommendation_result_rows = rows(conn, """
+        SELECT r.*
+        FROM race_bet_recommendation r
+        ORDER BY r.race_date
+    """)
+    bet_result_index = {
+        (row["race_id"], row["bet_type"], row["combination"]): row
+        for row in rows(conn, """
+            SELECT b.race_id, b.bet_type, b.combination,
+                   br.hit, br.return_amount, br.stake_amount
+            FROM race_prediction_bet b
+            JOIN race_prediction p ON p.id = b.prediction_id
+            JOIN race_prediction_bet_result br ON br.prediction_bet_id = b.id
+            WHERE COALESCE(p.sample_kind, 'live') = 'live'
+        """)
+    }
+    recommendation_daily_map: dict[str, dict] = defaultdict(lambda: {
+        "race_date": "",
+        "recommendations": 0,
+        "buy_recommendations": 0,
+        "tickets": 0,
+        "hits": 0,
+        "stake_total": 0,
+        "return_total": 0,
+    })
+    for row in recommendation_result_rows:
+        race_date = row.get("race_date") or ""
+        if not race_date:
+            continue
+        daily_item = recommendation_daily_map[race_date]
+        daily_item["race_date"] = race_date
+        daily_item["recommendations"] += 1
+        features = parse_feature_json(row.get("feature_json"))
+        decision_key, _decision_label = recommendation_decision(row, features)
+        if decision_key != "buy":
+            continue
+        daily_item["buy_recommendations"] += 1
+        try:
+            combinations = json.loads(row.get("combinations_json") or "[]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            combinations = []
+        for combination in combinations:
+            result = bet_result_index.get((
+                row.get("race_id"),
+                row.get("recommended_bet_type"),
+                str(combination),
+            ))
+            if not result:
+                continue
+            daily_item["tickets"] += 1
+            daily_item["hits"] += int(result.get("hit") or 0)
+            daily_item["stake_total"] += int(result.get("stake_amount") or 0)
+            daily_item["return_total"] += int(result.get("return_amount") or 0)
+    recommendation_trend = []
+    for item in sorted(recommendation_daily_map.values(), key=lambda row: row["race_date"]):
+        tickets = int(item["tickets"] or 0)
+        stake = int(item["stake_total"] or 0)
+        item["buy_rate"] = (
+            item["buy_recommendations"] * 100 / item["recommendations"]
+            if item["recommendations"]
+            else None
+        )
+        item["buy_hit_rate"] = item["hits"] * 100 / tickets if tickets else None
+        item["buy_roi"] = item["return_total"] * 100 / stake if stake else None
+        recommendation_trend.append(item)
     miss_reason_counts: dict[str, int] = defaultdict(int)
     for row in live_result_rows:
         reason = prediction_miss_reason(row)
@@ -4578,6 +4664,38 @@ def render_prediction_results(conn) -> str:
           ["race_date", "sample_kind", "races", "predictions", "exact_hits", "exact_rate", "first_rate", "avg_top3_count", "stake_total", "return_total", "roi"],
       )}
     """, "参考値は薄く表示します。6月13日のように結果取得後に生成された予想は、実運用成績と区別して確認できます。")
+
+    recommendation_trend_display = [
+        {
+            "race_date": row["race_date"],
+            "recommendations": number(row["recommendations"]),
+            "buy_recommendations": number(row["buy_recommendations"]),
+            "buy_rate": pct(row["buy_rate"]),
+            "tickets": number(row["tickets"]),
+            "hits": number(row["hits"]),
+            "buy_hit_rate": pct(row["buy_hit_rate"]),
+            "stake_total": yen(row["stake_total"]),
+            "return_total": yen(row["return_total"]),
+            "buy_roi": pct(row["buy_roi"]),
+        }
+        for row in recommendation_trend
+    ]
+    recommendation_trend_section = section("buy recommendation trend", f"""
+      <div class="grid two">
+        {section("ROI / hit rate", line_chart(
+            recommendation_trend,
+            "race_date",
+            [("buy_roi", "buy ROI", "#d9480f"), ("buy_hit_rate", "buy hit rate", "#0f766e")],
+            30,
+        ))}
+        {section("buy count", bar_chart(recommendation_trend, "race_date", "buy_recommendations", number, 30))}
+      </div>
+      {table(
+          ["date", "recommendations", "buy", "buy rate", "tickets", "hits", "hit rate", "stake", "return", "ROI"],
+          recommendation_trend_display,
+          ["race_date", "recommendations", "buy_recommendations", "buy_rate", "tickets", "hits", "buy_hit_rate", "stake_total", "return_total", "buy_roi"],
+      )}
+    """, "Shows whether the operational buy filters are improving daily buy-side ROI and hit rate.")
 
     bet_total_display = [
         {
@@ -4799,6 +4917,85 @@ def render_prediction_results(conn) -> str:
             for row in rows(conn, query)
         ]
 
+    def condition_candidate_rows(recent: bool = False) -> list[dict]:
+        recent_clause = ""
+        params = ()
+        if recent and latest_result_date:
+            recent_clause = "AND p.race_date >= DATE(?, '-6 day')"
+            params = (latest_result_date,)
+        candidates = [
+            ("all", "all feature_line_mix", "1=1"),
+            ("ev06_vol_low", "EV >= 0.6 and volatility low", "c.expected_value_score >= 0.6 AND v.volatility_probability < 0.4"),
+            ("conf07_vol_low", "confidence >= 0.7 and volatility low", "c.confidence_score >= 0.7 AND v.volatility_probability < 0.4"),
+            ("conf06_ev06", "confidence >= 0.6 and EV >= 0.6", "c.confidence_score >= 0.6 AND c.expected_value_score >= 0.6"),
+            ("conf07_line23", "confidence >= 0.7 and line_count 2-3", "c.confidence_score >= 0.7 AND v.line_count BETWEEN 2 AND 3"),
+            ("line23_tanki2", "line_count 2-3 and tanki <= 2", "v.line_count BETWEEN 2 AND 3 AND v.tanki_count <= 2"),
+            ("maxline3", "max line members >= 3", "c.max_line_members >= 3"),
+            ("ev07", "EV >= 0.7", "c.expected_value_score >= 0.7"),
+            ("vol_low", "volatility low", "v.volatility_probability < 0.4"),
+        ]
+
+        def candidate_stats(condition: str) -> dict:
+            return rows(conn, f"""
+                SELECT COUNT(*) AS predictions,
+                       SUM(r.hit_exact) AS exact_hits,
+                       ROUND(AVG(r.hit_exact) * 100, 1) AS exact_rate,
+                       ROUND(AVG(r.hit_1st) * 100, 1) AS first_rate,
+                       ROUND(AVG(r.hit_top3_count), 2) AS avg_top3_count,
+                       SUM(r.stake_amount) AS stake_total,
+                       SUM(r.return_amount) AS return_total,
+                       ROUND(SUM(r.return_amount) * 100.0 / NULLIF(SUM(r.stake_amount), 0), 1) AS roi
+                FROM race_prediction p
+                JOIN race_prediction_result r ON r.prediction_id = p.id
+                LEFT JOIN race_confidence c ON c.race_id = p.race_id
+                LEFT JOIN race_volatility_features v ON v.race_id = p.race_id
+                WHERE p.prediction_type = 'feature_line_mix'
+                  AND COALESCE(p.sample_kind, 'live') = 'live'
+                  {recent_clause}
+                  AND ({condition})
+            """, params)[0]
+
+        baseline = candidate_stats("1=1")
+        baseline_predictions = int(baseline.get("predictions") or 0)
+        baseline_exact_rate = float(baseline.get("exact_rate") or 0)
+        display_rows = []
+        for _key, label, condition in candidates:
+            row = candidate_stats(condition)
+            predictions = int(row.get("predictions") or 0)
+            roi_value = row.get("roi")
+            exact_rate_value = float(row.get("exact_rate") or 0)
+            roi_float = float(roi_value) if roi_value is not None else None
+            if predictions < 30:
+                decision = pill("sample low", "warn")
+                rank = 3
+            elif roi_float is not None and roi_float >= 100 and exact_rate_value >= baseline_exact_rate:
+                decision = pill("buy candidate", "ok")
+                rank = 0
+            elif roi_float is not None and roi_float >= 70:
+                decision = pill("watch", "warn")
+                rank = 1
+            else:
+                decision = pill("skip", "low")
+                rank = 2
+            display_rows.append({
+                "decision": decision,
+                "condition": label,
+                "coverage": pct(predictions * 100 / baseline_predictions if baseline_predictions else None),
+                "predictions": number(predictions),
+                "exact_hits": number(row.get("exact_hits") or 0),
+                "exact_rate": pct(row.get("exact_rate")),
+                "first_rate": pct(row.get("first_rate")),
+                "avg_top3_count": decimal(row.get("avg_top3_count"), 2),
+                "stake_total": yen(row.get("stake_total")),
+                "return_total": yen(row.get("return_total")),
+                "roi": pct(row.get("roi")),
+                "_rank": rank,
+                "_roi": roi_float if roi_float is not None else -1,
+                "_predictions": predictions,
+            })
+        display_rows.sort(key=lambda row: (row["_rank"], -row["_roi"], -row["_predictions"]))
+        return display_rows
+
     confidence_distribution_display = [
         {
             "bucket": row["bucket"],
@@ -4862,6 +5059,14 @@ def render_prediction_results(conn) -> str:
     """, "AND c.race_id IS NOT NULL")
     risk_headers = ["区分", "予想数", "完全的中", "完全的中率", "1着率", "3着内平均", "投資", "払戻", "回収率"]
     risk_fields = ["bucket", "predictions", "exact_hits", "exact_rate", "first_rate", "avg_top3_count", "stake_total", "return_total", "roi"]
+    condition_headers = ["decision", "condition", "coverage", "predictions", "exact hits", "exact rate", "1st rate", "avg top3", "stake", "return", "roi"]
+    condition_fields = ["decision", "condition", "coverage", "predictions", "exact_hits", "exact_rate", "first_rate", "avg_top3_count", "stake_total", "return_total", "roi"]
+    body += section("feature_line_mix buy condition candidates", f"""
+      <div class="grid two">
+        {section("Cumulative", rich_table(condition_headers, condition_candidate_rows(False), condition_fields))}
+        {section("Recent 7 days", rich_table(condition_headers, condition_candidate_rows(True), condition_fields))}
+      </div>
+    """, "Compares low-cost SQL filters so weekend analysis can choose buy/skip rules without extra GitHub Actions minutes.")
     body += section("feature_line_mix 回収率改善分析", f"""
       <div class="grid two">
         {section("confidence_score分布", table(
@@ -5067,6 +5272,7 @@ def render_prediction_results(conn) -> str:
       {daily_type_section}
       {confidence_grid_section}
       {trend_section}
+      {recommendation_trend_section}
       {bet_total_section}
       {bet_daily_section}
       {total_type_section}
