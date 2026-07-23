@@ -1367,7 +1367,7 @@ def save_bet_recommendations(
                 similar.get("roi"),
                 json.dumps(recommendation_features, ensure_ascii=False),
                 RECOMMENDATION_MODEL_VERSION,
-                datetime.now().isoformat(timespec="seconds"),
+                datetime.now(JST).isoformat(timespec="seconds"),
             ),
         )
         saved += 1
@@ -1542,7 +1542,7 @@ def generate_predictions(conn, target_date: str, replace: bool = False) -> int:
                     MODEL_VERSION,
                     STAKE_AMOUNT,
                     sample_kind,
-                    datetime.now().isoformat(timespec="seconds"),
+                    datetime.now(JST).isoformat(timespec="seconds"),
                 ),
             )
             saved += 1
@@ -1650,7 +1650,7 @@ def evaluate_predictions(conn) -> int:
                 stake,
                 return_amount,
                 roi,
-                datetime.now().isoformat(timespec="seconds"),
+                datetime.now(JST).isoformat(timespec="seconds"),
             ),
         )
         checked += 1
@@ -1716,7 +1716,7 @@ def evaluate_prediction_bets(conn) -> int:
                 stake,
                 return_amount,
                 roi,
-                datetime.now().isoformat(timespec="seconds"),
+                datetime.now(JST).isoformat(timespec="seconds"),
             ),
         )
         checked += 1
