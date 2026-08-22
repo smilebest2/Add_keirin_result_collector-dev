@@ -29,7 +29,7 @@ jobs:
           echo "DB_RESTORE_ARTIFACT_NAME=" >> "$GITHUB_ENV"
           artifact="$(
             gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts" --paginate \
-              --jq '.artifacts[] | select((.name == "keirin-db-backup" or .name == "keirin-db-core-backup") and .expired == false) | [.created_at, .id, .name] | @tsv' \
+              --jq '.artifacts[] | select((.name == "keirin-db-backup" or .name == "keirin-db-core-backup" or .name == "keirin-db-restore-backup" or .name == "keirin-db-results-backup") and .expired == false) | [.created_at, .id, .name] | @tsv' \
               | sort -r \
               | head -n 1 || true
           )"
@@ -129,7 +129,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts" --paginate \
-            --jq '.artifacts[] | select((.name == "keirin-db-backup" or .name == "keirin-db-core-backup") and .expired == false) | [.created_at, .id, .name] | @tsv' \
+            --jq '.artifacts[] | select((.name == "keirin-db-backup" or .name == "keirin-db-core-backup" or .name == "keirin-db-restore-backup" or .name == "keirin-db-results-backup") and .expired == false) | [.created_at, .id, .name] | @tsv' \
             | sort -r \
             | tail -n +4 \
             | while IFS="$(printf '\t')" read -r created_at artifact_id artifact_name; do
