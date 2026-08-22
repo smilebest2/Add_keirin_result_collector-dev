@@ -13,7 +13,7 @@ on:
 
 permissions:
   contents: write
-  actions: read
+  actions: write
 
 jobs:
   collect:
@@ -43,15 +43,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           echo "DB_RESTORE_STATUS=missing" >> "$GITHUB_ENV"
-          echo "DB_RESTORE_RUN_ID=" >> "$GITHUB_ENV"
-          run_id="$(gh run list --workflow "Collect Keirin Results" --branch main --status success --json databaseId --jq '.[0].databaseId' || true)"
-          if [ -n "$run_id" ]; then
-            echo "DB_RESTORE_RUN_ID=$run_id" >> "$GITHUB_ENV"
+          echo "DB_RESTORE_ARTIFACT_ID=" >> "$GITHUB_ENV"
+          echo "DB_RESTORE_ARTIFACT_NAME=" >> "$GITHUB_ENV"
+          artifact="$(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts" --paginate \
+              --jq '.artifacts[] | select((.name == "keirin-db-backup" or .name == "keirin-db-core-backup") and .expired == false) | [.created_at, .id, .name] | @tsv' \
+              | sort -r \
+              | head -n 1 || true
+          )"
+          if [ -n "$artifact" ]; then
+            created_at="$(echo "$artifact" | cut -f1)"
+            artifact_id="$(echo "$artifact" | cut -f2)"
+            artifact_name="$(echo "$artifact" | cut -f3)"
+            echo "Restoring DB artifact ${artifact_name} (${artifact_id}) from ${created_at}."
+            echo "DB_RESTORE_ARTIFACT_ID=$artifact_id" >> "$GITHUB_ENV"
+            echo "DB_RESTORE_ARTIFACT_NAME=$artifact_name" >> "$GITHUB_ENV"
             mkdir -p data
             restore_dir="data/.restore-db"
             rm -rf "$restore_dir"
             mkdir -p "$restore_dir"
-            if gh run download "$run_id" --name keirin-db-backup --dir "$restore_dir"; then
+            if gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "$restore_dir/db.zip"; then
+              unzip -q "$restore_dir/db.zip" -d "$restore_dir"
               if [ -f "$restore_dir/keirin.db" ]; then
                 mv "$restore_dir/keirin.db" data/keirin.db
                 echo "DB_RESTORE_STATUS=restored" >> "$GITHUB_ENV"
@@ -64,6 +76,16 @@ jobs:
               echo "DB_RESTORE_STATUS=download_failed" >> "$GITHUB_ENV"
             fi
             rm -rf "$restore_dir"
+          fi
+          if [ ! -f data/keirin.db ]; then
+            mkdir -p data
+            if gh release download keirin-db-bootstrap --pattern keirin.db --dir data; then
+              echo "Restored DB from keirin-db-bootstrap release asset."
+              echo "DB_RESTORE_STATUS=restored" >> "$GITHUB_ENV"
+              echo "DB_RESTORE_ARTIFACT_NAME=keirin-db-bootstrap" >> "$GITHUB_ENV"
+            else
+              echo "No bootstrap release DB restored; using repository DB if present."
+            fi
           fi
           test -f data/keirin.db || echo "No DB artifact restored; using repository DB if present."
 
@@ -85,36 +107,75 @@ jobs:
       - name: Build race risk features
         run: python -m src.race_risk_features
 
-      - name: Generate predictions
-        env:
-          SITE_ENV: ${{ vars.SITE_ENV }}
-        run: python -m src.prediction
-
-      - name: Export analytics pages
-        env:
-          SITE_ENV: ${{ vars.SITE_ENV }}
-        run: python -m src.analysis
-
-      - name: Export public data
-        run: python -m src.export_public_data
-
       - name: Validate DB backup continuity
         env:
           ALLOW_FRESH_DB: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_fresh_db || false }}
         run: |
-          python -m src.db_guard summary --json-file db-guard-after.json
+          python -m src.db_guard summary --json-file db-guard-after-core.json
           args=""
           if [ "$ALLOW_FRESH_DB" = "true" ]; then
             args="--allow-fresh-db"
           fi
           python -m src.db_guard validate \
             --before db-guard-before.json \
-            --after db-guard-after.json \
+            --after db-guard-after-core.json \
             --restore-status "$DB_RESTORE_STATUS" \
             $args \
             --json-file db-guard-validation.json \
             --env-file "$GITHUB_ENV" \
             --summary-file "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload core DB backup
+        if: env.DB_GUARD_OK == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: keirin-db-core-backup
+          path: data/keirin.db
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Generate predictions
+        if: env.DB_GUARD_OK == 'true'
+        env:
+          SITE_ENV: ${{ vars.SITE_ENV }}
+        run: python -m src.prediction
+
+      - name: Export analytics pages
+        if: env.DB_GUARD_OK == 'true'
+        env:
+          SITE_ENV: ${{ vars.SITE_ENV }}
+        run: python -m src.analysis
+
+      - name: Export public data
+        if: env.DB_GUARD_OK == 'true'
+        run: python -m src.export_public_data
+
+      - name: Summarize final DB backup
+        if: env.DB_GUARD_OK == 'true'
+        run: python -m src.db_guard summary --json-file db-guard-after.json
+
+      - name: Upload final DB backup
+        if: env.DB_GUARD_OK == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: keirin-db-backup
+          path: data/keirin.db
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Prune old DB artifacts
+        if: env.DB_GUARD_OK == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts" --paginate \
+            --jq '.artifacts[] | select((.name == "keirin-db-backup" or .name == "keirin-db-core-backup") and .expired == false) | [.created_at, .id, .name] | @tsv' \
+            | sort -r \
+            | tail -n +4 \
+            | while IFS="$(printf '\t')" read -r created_at artifact_id artifact_name; do
+                echo "Deleting old DB artifact ${artifact_name} (${artifact_id}) from ${created_at}."
+                gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
+              done
 
       - name: Commit collected data
         if: env.DB_GUARD_OK == 'true'
@@ -123,15 +184,6 @@ jobs:
           commit_message: "Collect keirin race results"
           file_pattern: docs/*.html docs/.nojekyll docs/data/*.json docs/data/race_details/*.json
 
-      - name: Upload DB backup
-        if: env.DB_GUARD_OK == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: keirin-db-backup
-          path: data/keirin.db
-          retention-days: 3
-          if-no-files-found: error
-
       - name: Upload DB guard diagnostics
         if: env.DB_GUARD_OK != 'true'
         uses: actions/upload-artifact@v7
@@ -139,10 +191,10 @@ jobs:
           name: keirin-db-guard-diagnostics
           path: |
             db-guard-before.json
-            db-guard-after.json
+            db-guard-after-core.json
             db-guard-validation.json
             logs/*.log
-          retention-days: 3
+          retention-days: 14
           if-no-files-found: warn
 
       - name: Fail when DB backup is not safe to publish
