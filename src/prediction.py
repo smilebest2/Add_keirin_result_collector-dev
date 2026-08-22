@@ -35,10 +35,18 @@ TYPE_KANJO = PREDICTION_TYPES[4]
 TYPE_FEATURE_3RENTAN = "feature_3rentan"
 TYPE_FEATURE_BOX_3RENTAN = "feature_box_3rentan"
 TYPE_FEATURE_LINE_MIX = "feature_line_mix"
+TYPE_ANA_LINE_MIX = "ana_line_mix"
+TYPE_LINE_BREAK = "line_break"
+TYPE_ANA_PICKUP = "ana_pickup"
+TYPE_LINE_BREAK_PICKUP = "line_break_pickup"
 FEATURE_PREDICTION_TYPES = [
     TYPE_FEATURE_3RENTAN,
     TYPE_FEATURE_BOX_3RENTAN,
     TYPE_FEATURE_LINE_MIX,
+    TYPE_ANA_LINE_MIX,
+    TYPE_LINE_BREAK,
+    TYPE_ANA_PICKUP,
+    TYPE_LINE_BREAK_PICKUP,
 ]
 ALL_PREDICTION_TYPES = [*PREDICTION_TYPES, *FEATURE_PREDICTION_TYPES]
 
@@ -629,15 +637,240 @@ def feature_ranked(scored: list[dict]) -> list[dict]:
     )
 
 
+def feature_value(row: dict, key: str, default: float = 0.0) -> float:
+    feature = row.get("entry_feature") or {}
+    return safe_float(feature.get(key, row.get(key)), default)
+
+
+def feature_int(row: dict, key: str, default: int = 0) -> int:
+    return int(feature_value(row, key, default))
+
+
+def line_no(row: dict) -> int:
+    return feature_int(row, "line_no", int(row.get("car_no") or 0))
+
+
+def line_position_value(row: dict) -> int:
+    return feature_int(row, "line_position", int(row.get("line_position") or 0))
+
+
+def is_line_head(row: dict) -> bool:
+    return feature_value(row, "line_is_head") >= 0.5 or line_position_value(row) == 1
+
+
+def is_line_second(row: dict) -> bool:
+    return feature_value(row, "is_second") >= 0.5 or line_position_value(row) == 2
+
+
+def racer_age(row: dict) -> float:
+    if row.get("age") is not None:
+        return safe_float(row.get("age"))
+    if is_line_head(row):
+        return feature_value(row, "leader_age")
+    return 0.0
+
+
+def same_line(left: dict, right: dict) -> bool:
+    return line_no(left) == line_no(right)
+
+
+def line_groups(scored: list[dict]) -> dict[int, list[dict]]:
+    groups: dict[int, list[dict]] = {}
+    for row in scored:
+        if not row.get("feature_available"):
+            continue
+        groups.setdefault(line_no(row), []).append(row)
+    return groups
+
+
+def line_race_context(ranked: list[dict]) -> dict:
+    groups = line_groups(ranked)
+    sizes = [len(items) for items in groups.values()]
+    top1 = ranked[0]
+    top2 = ranked[1] if len(ranked) >= 2 else None
+    top3 = ranked[2] if len(ranked) >= 3 else None
+    top_gap = metric(top1, "feature_score") - metric(top2, "feature_score") if top2 else 0.0
+    top2_gap = metric(top2, "feature_score") - metric(top3, "feature_score") if top2 and top3 else 0.0
+    top_two_different_lines = bool(top2 and not same_line(top1, top2))
+    top_two_heads = bool(top2 and is_line_head(top1) and is_line_head(top2))
+    top_two_young_heads = bool(top2 and top_two_heads and racer_age(top1) and racer_age(top2) and racer_age(top1) <= 24 and racer_age(top2) <= 24)
+    top_two_escape_dash = bool(
+        top2
+        and (
+            feature_value(top1, "style_escape") >= 0.5
+            or feature_value(top1, "style_dash") >= 0.5
+            or feature_value(top1, "leader_is_escape_type") >= 0.5
+            or feature_value(top1, "leader_is_dash_type") >= 0.5
+        )
+        and (
+            feature_value(top2, "style_escape") >= 0.5
+            or feature_value(top2, "style_dash") >= 0.5
+            or feature_value(top2, "leader_is_escape_type") >= 0.5
+            or feature_value(top2, "leader_is_dash_type") >= 0.5
+        )
+    )
+    line_strengths = sorted(
+        {
+            line_no(row): feature_value(row, "line_strength")
+            for row in ranked
+        }.values(),
+        reverse=True,
+    )
+    line_strength_gap = line_strengths[0] - line_strengths[1] if len(line_strengths) >= 2 else 0.0
+    risk = 0.0
+    reasons = []
+    if top_gap < 3.0:
+        risk += 18.0
+        reasons.append("feature上位差が小さい")
+    if top_two_different_lines and top_two_heads:
+        risk += 22.0
+        reasons.append("主軸候補が別線先頭同士")
+    if top_two_young_heads:
+        risk += 18.0
+        reasons.append("若い先頭同士で踏み合い想定")
+    if top_two_escape_dash:
+        risk += 10.0
+        reasons.append("先行・捲り型同士")
+    if len(groups) >= 4:
+        risk += 8.0
+        reasons.append("分線が多い")
+    if sum(1 for size in sizes if size == 1) >= 2:
+        risk += 6.0
+        reasons.append("単騎が多い")
+    if line_strength_gap < 8.0:
+        risk += 8.0
+        reasons.append("ライン強度差が小さい")
+    if len(ranked) >= 9:
+        risk += 8.0
+        reasons.append("9車立て")
+    risk = max(0.0, min(100.0, risk))
+    return {
+        "main_line_no": line_no(top1),
+        "line_count": len(groups),
+        "single_rider_count": sum(1 for size in sizes if size == 1),
+        "top1_top2_feature_gap": round(top_gap, 3),
+        "top2_top3_feature_gap": round(top2_gap, 3),
+        "line_strength_gap": round(line_strength_gap, 3),
+        "top_two_different_lines": top_two_different_lines,
+        "top_two_heads": top_two_heads,
+        "top_two_young_heads": top_two_young_heads,
+        "top_two_escape_dash": top_two_escape_dash,
+        "favorite_collapse_risk": round(risk, 3),
+        "favorite_collapse_reasons": reasons,
+    }
+
+
+def ana_candidate_score(row: dict, main_line: int | None = None) -> float:
+    position = line_position_value(row)
+    score = (
+        metric(row, "feature_score") * 0.85
+        + metric(row, "top3_score") * 0.08
+        + metric(row, "base_score") * 0.03
+        - feature_value(row, "race_score_rank") * 0.35
+        - feature_value(row, "race_top3_rank") * 0.25
+        - feature_value(row, "line_strength_rank") * 1.2
+    )
+    if is_line_second(row):
+        score += 7.0
+    if position >= 3:
+        score += 4.0
+    if feature_value(row, "style_mark") >= 0.5:
+        score += 3.0
+    if feature_value(row, "style_dash") >= 0.5:
+        score += 2.0
+    if main_line is not None and line_no(row) != main_line:
+        score += 4.0
+    if feature_value(row, "line_member_count") <= 1:
+        score -= 3.0
+    return score
+
+
+def pick_ana_line_mix(ranked: list[dict]) -> tuple[list[dict], dict]:
+    context = line_race_context(ranked)
+    first = ranked[0]
+    main_line = line_no(first)
+    rest = [row for row in ranked if int(row["car_no"]) != int(first["car_no"])]
+    main_followers = [row for row in rest if line_no(row) == main_line and not is_line_head(row)]
+    other_line = [row for row in rest if line_no(row) != main_line]
+    second_pool = main_followers or other_line or rest
+    second = max(
+        second_pool,
+        key=lambda row: (ana_candidate_score(row, main_line), metric(row, "top3_score"), -int(row["car_no"])),
+    )
+    rest = [row for row in rest if int(row["car_no"]) != int(second["car_no"])]
+    third_pool = [row for row in rest if line_no(row) != main_line] or rest
+    third = max(
+        third_pool,
+        key=lambda row: (ana_candidate_score(row, main_line), metric(row, "top3_score"), -int(row["car_no"])),
+    )
+    context["strategy"] = "main_line_plus_other_line"
+    return [first, second, third], context
+
+
+def pick_line_break(ranked: list[dict]) -> tuple[list[dict], dict]:
+    context = line_race_context(ranked)
+    favorites = ranked[:2]
+    favorite_cars = {int(row["car_no"]) for row in favorites}
+    favorite_lines = {line_no(row) for row in favorites}
+    candidates = [row for row in ranked if int(row["car_no"]) not in favorite_cars]
+    other_lines = [row for row in candidates if line_no(row) not in favorite_lines]
+    favorite_followers = [row for row in candidates if line_no(row) in favorite_lines and not is_line_head(row)]
+    pool = other_lines + favorite_followers + candidates
+    picked = take_unique(
+        sorted(
+            pool,
+            key=lambda row: (
+                ana_candidate_score(row, None)
+                + (6.0 if line_no(row) not in favorite_lines else 0.0)
+                + (4.0 if is_line_second(row) else 0.0)
+                + (2.0 if feature_value(row, "style_dash") >= 0.5 else 0.0),
+                metric(row, "top3_score"),
+                -int(row["car_no"]),
+            ),
+            reverse=True,
+        ),
+        ranked,
+    )
+    context["strategy"] = "favorite_line_break"
+    context["excluded_favorite_cars"] = sorted(favorite_cars)
+    return picked, context
+
+
+def is_ana_pickup_context(context: dict) -> bool:
+    return bool(
+        context.get("top_two_young_heads")
+        or (
+            context.get("top_two_different_lines")
+            and context.get("top_two_heads")
+            and safe_float(context.get("top1_top2_feature_gap")) < 3.0
+        )
+    )
+
+
+def is_line_break_pickup_context(context: dict) -> bool:
+    return bool(
+        safe_float(context.get("top1_top2_feature_gap")) < 3.0
+        and not context.get("top_two_young_heads")
+    )
+
+
 def feature_reason(prediction_type: str) -> str:
     if prediction_type == TYPE_FEATURE_BOX_3RENTAN:
         return "race_entry_features の feature_score 上位3名を3連単BOX候補として評価。既存予想とは別モード。"
     if prediction_type == TYPE_FEATURE_LINE_MIX:
         return "feature_score 1位を軸に、番手補正とライン強度補正を加えて2着・3着候補を選定。既存予想とは別モード。"
+    if prediction_type == TYPE_ANA_LINE_MIX:
+        return "feature_score 1位を軸にしつつ、同ライン後続と別線候補を混ぜて高配当寄りの別線混入を評価。既存予想とは別モード。"
+    if prediction_type == TYPE_LINE_BREAK:
+        return "主軸候補が別線先頭同士・若手先頭同士などで崩れるリスクを見て、主軸外と番手候補から穴決着を評価。既存予想とは別モード。"
+    if prediction_type == TYPE_ANA_PICKUP:
+        return "過去DBで穴予想の回収率が良かった条件（若手別線先頭同士、または別線先頭同士かつ上位差僅差）に限定したピックアップ。"
+    if prediction_type == TYPE_LINE_BREAK_PICKUP:
+        return "過去DBで line_break の穴成績が良かった上位差僅差レースに限定し、若手別線先頭同士は除外したピックアップ。"
     return "race_entry_features の feature_score 上位3名を1着・2着・3着順に選定。既存予想とは別モード。"
 
 
-def feature_detail_json(prediction_type: str, picked: list[dict]) -> str:
+def feature_detail_json(prediction_type: str, picked: list[dict], context: dict | None = None) -> str:
     details = []
     for row in picked:
         feature = row.get("entry_feature") or {}
@@ -656,7 +889,7 @@ def feature_detail_json(prediction_type: str, picked: list[dict]) -> str:
             "line_position": int(safe_float(feature.get("line_position"))),
             "line_strength": round(safe_float(feature.get("line_strength")), 3),
         })
-    return json.dumps({"prediction_type": prediction_type, "details": details}, ensure_ascii=False)
+    return json.dumps({"prediction_type": prediction_type, "context": context or {}, "details": details}, ensure_ascii=False)
 
 
 def pick_feature_combo(prediction_type: str, scored: list[dict]) -> tuple[list[int], float, str, str, str]:
@@ -664,8 +897,21 @@ def pick_feature_combo(prediction_type: str, scored: list[dict]) -> tuple[list[i
     if len(ranked) < 3:
         return [], 0, "race_entry_features が不足しているため新特徴量予想を作成しません。", "", ""
 
+    context = None
     if prediction_type in {TYPE_FEATURE_3RENTAN, TYPE_FEATURE_BOX_3RENTAN}:
         picked = ranked[:3]
+    elif prediction_type in {TYPE_ANA_LINE_MIX, TYPE_ANA_PICKUP}:
+        picked, context = pick_ana_line_mix(ranked)
+        if prediction_type == TYPE_ANA_PICKUP and not is_ana_pickup_context(context):
+            return [], 0, "穴ピックアップ条件に該当しないため予想を作成しません。", "", ""
+        if prediction_type == TYPE_ANA_PICKUP:
+            context["pickup_reason"] = "young_diff_head_or_diff_head_gap_lt3"
+    elif prediction_type in {TYPE_LINE_BREAK, TYPE_LINE_BREAK_PICKUP}:
+        picked, context = pick_line_break(ranked)
+        if prediction_type == TYPE_LINE_BREAK_PICKUP and not is_line_break_pickup_context(context):
+            return [], 0, "line_break ピックアップ条件に該当しないため予想を作成しません。", "", ""
+        if prediction_type == TYPE_LINE_BREAK_PICKUP:
+            context["pickup_reason"] = "top1_top2_gap_lt3_without_young_diff_head"
     else:
         first = ranked[0]
         rest = [row for row in ranked if int(row["car_no"]) != int(first["car_no"])]
@@ -699,7 +945,7 @@ def pick_feature_combo(prediction_type: str, scored: list[dict]) -> tuple[list[i
         round(score_value, 3),
         feature_reason(prediction_type),
         "",
-        feature_detail_json(prediction_type, picked),
+        feature_detail_json(prediction_type, picked, context),
     )
 
 
@@ -774,6 +1020,15 @@ def bet_combinations(predicted: list[int], prediction_type: str | None = None) -
         "=".join(str(item) for item in sorted(pair))
         for pair in [(first, second), (first, third), (second, third)]
     ]
+    if prediction_type in {TYPE_LINE_BREAK, TYPE_LINE_BREAK_PICKUP}:
+        return {
+            "ワイド": wide,
+            "3連複": [top3],
+            TRIFECTA: [
+                "-".join(str(item) for item in combination)
+                for combination in permutations(predicted, 3)
+            ],
+        }
     return {
         "2車複": [top2],
         "2車単": [f"{first}-{second}"],

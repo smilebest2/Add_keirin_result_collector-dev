@@ -3155,6 +3155,10 @@ PREDICTION_TYPE_ORDER.extend([
     "feature_3rentan",
     "feature_box_3rentan",
     "feature_line_mix",
+    "ana_line_mix",
+    "line_break",
+    "ana_pickup",
+    "line_break_pickup",
 ])
 
 PREDICTION_TYPE_SUMMARY = {
@@ -3170,6 +3174,10 @@ PREDICTION_TYPE_SUMMARY.update({
     "feature_3rentan": "feature_score top3",
     "feature_box_3rentan": "feature_score top3 box",
     "feature_line_mix": "feature score + line mix",
+    "ana_line_mix": "main line + other line",
+    "line_break": "favorite line break",
+    "ana_pickup": "ana filtered pickup",
+    "line_break_pickup": "line break filtered pickup",
 })
 
 
@@ -3986,6 +3994,131 @@ def bet_recommendation_rows_for_date(conn, target_date: str | None) -> list[dict
     return result
 
 
+def pickup_condition_label(row: dict) -> str:
+    prediction_type = row.get("prediction_type")
+    young_diff_head = int(row.get("young_diff_head") or 0) == 1
+    diff_head = int(row.get("diff_head") or 0) == 1
+    top_gap = to_float(row.get("top_gap"))
+    if prediction_type == "ana_pickup":
+        if young_diff_head:
+            return "若手別線先頭同士"
+        if diff_head and top_gap is not None and top_gap < 3:
+            return "別線先頭同士・上位差僅差"
+        return "穴ピックアップ条件"
+    if prediction_type == "line_break_pickup":
+        return "上位差僅差（若手別線先頭同士は除外）"
+    return "ピックアップ"
+
+
+def hole_pickup_rows_for_date(conn, target_date: str | None) -> list[dict]:
+    if not target_date:
+        return []
+    raw_rows = rows(conn, """
+        WITH feature_scores AS (
+            SELECT
+                race_id,
+                car_no,
+                line_no,
+                line_position,
+                leader_age,
+                (
+                    score_minus_race_avg * 1.5
+                    + top3_minus_race_avg * 1.2
+                    + win_rate_minus_race_avg * 1.0
+                    - race_score_rank * 0.8
+                    - race_top3_rank * 0.6
+                    - line_strength_rank * 0.7
+                    - score_gap_top * 0.5
+                    - score_gap_second * 0.3
+                ) AS feature_score
+            FROM race_entry_features
+        ),
+        ranked AS (
+            SELECT
+                *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY race_id
+                    ORDER BY feature_score DESC, car_no ASC
+                ) AS feature_rank
+            FROM feature_scores
+        ),
+        context AS (
+            SELECT
+                first.race_id,
+                ROUND(first.feature_score - second.feature_score, 3) AS top_gap,
+                CASE
+                    WHEN first.line_no <> second.line_no
+                     AND first.line_position = 1
+                     AND second.line_position = 1
+                    THEN 1 ELSE 0
+                END AS diff_head,
+                CASE
+                    WHEN first.line_no <> second.line_no
+                     AND first.line_position = 1
+                     AND second.line_position = 1
+                     AND first.leader_age <= 24
+                     AND second.leader_age <= 24
+                    THEN 1 ELSE 0
+                END AS young_diff_head
+            FROM ranked first
+            JOIN ranked second
+              ON second.race_id = first.race_id
+             AND second.feature_rank = 2
+            WHERE first.feature_rank = 1
+        )
+        SELECT
+            p.*,
+            s.venue,
+            s.race_no,
+            s.race_title,
+            s.start_time,
+            s.lineup_text,
+            c.confidence_score,
+            c.confidence_stars,
+            v.volatility_probability,
+            v.volatility_bucket,
+            v.line_count,
+            v.tanki_count,
+            context.top_gap,
+            context.diff_head,
+            context.young_diff_head,
+            (
+              SELECT GROUP_CONCAT(e.car_no, ' ')
+              FROM race_entry e
+              WHERE e.race_id = p.race_id
+            ) AS entry_car_nos
+        FROM race_prediction p
+        LEFT JOIN race_schedule s ON s.race_id = p.race_id
+        LEFT JOIN race_confidence c ON c.race_id = p.race_id
+        LEFT JOIN race_volatility_features v ON v.race_id = p.race_id
+        LEFT JOIN context ON context.race_id = p.race_id
+        WHERE p.race_date = ?
+          AND p.prediction_type IN ('ana_pickup', 'line_break_pickup')
+        ORDER BY s.start_time, s.venue, s.race_no, p.prediction_type
+    """, (target_date,))
+    result = []
+    for row in raw_rows:
+        volatility = to_float(row.get("volatility_probability"))
+        result.append({
+            "race": race_detail_link(row.get("race_id"), f'{row.get("venue") or ""} {row.get("race_no") or ""}R'),
+            "start_time": row.get("start_time") or "",
+            "prediction_type": row.get("prediction_type") or "",
+            "condition": pickup_condition_label(row),
+            "prediction": prediction_pick_cell(row),
+            "recommended_bets": prediction_bet_text(row),
+            "race_confidence": f'{h(row.get("confidence_stars") or "-")} {h(decimal(row.get("confidence_score"), 2))}',
+            "volatility": "" if volatility is None else f"{volatility:.2f}",
+            "line_context": f'{number(row.get("line_count") or 0)}分線 / 単騎{number(row.get("tanki_count") or 0)} / 上位差{decimal(row.get("top_gap"), 2)}',
+            "lineup_text": compact_lineup_text(row.get("lineup_text"), row.get("entry_car_nos")),
+            "reason": compact_reason_html(row.get("reason_text") or ""),
+            "_data": {
+                "type": row.get("prediction_type") or "",
+                "venue": row.get("venue") or "",
+            },
+        })
+    return result
+
+
 def render_predictions(conn) -> str:
     target_date = scalar(conn, "SELECT MAX(race_date) FROM race_prediction")
     if not target_date:
@@ -4090,6 +4223,54 @@ def render_predictions(conn) -> str:
             """,
             "最初に見る判断表です。買い候補だけに絞ってから、荒れ度と理由を確認してください。",
         )
+    pickup_rows = hole_pickup_rows_for_date(conn, target_date)
+    pickup_venues = sorted({row.get("_data", {}).get("venue") for row in pickup_rows if row.get("_data", {}).get("venue")})
+    pickup_type_options = "".join(
+        f'<option value="{h(item)}">{h(item)}</option>'
+        for item in ("ana_pickup", "line_break_pickup")
+        if any(row.get("_data", {}).get("type") == item for row in pickup_rows)
+    )
+    pickup_venue_options = "".join(f'<option value="{h(venue)}">{h(venue)}</option>' for venue in pickup_venues)
+    body += section(
+        "穴ピックアップ",
+        f"""
+          <div class="recommendation-toolbar"><span>条件に該当した穴予想だけを表示します。</span><span id="pickup-visible-count"></span></div>
+          <div class="filters" id="pickup-filters">
+            <label>予想タイプ<select id="pickup-filter-type"><option value="">すべて</option>{pickup_type_options}</select></label>
+            <label>会場<select id="pickup-filter-venue"><option value="">すべて</option>{pickup_venue_options}</select></label>
+          </div>
+          {rich_table(
+              ["レース", "発走", "タイプ", "条件", "予想", "買い目", "race confidence", "荒れ確率", "ライン状況", "並び", "根拠"],
+              pickup_rows,
+              ["race", "start_time", "prediction_type", "condition", "prediction", "recommended_bets", "race_confidence", "volatility", "line_context", "lineup_text", "reason"],
+              empty="穴ピックアップ対象はありません",
+          ).replace("<table>", '<table id="hole-pickups">', 1)}
+          <script>
+          (() => {{
+            const table = document.getElementById("hole-pickups");
+            if (!table) return;
+            const type = document.getElementById("pickup-filter-type");
+            const venue = document.getElementById("pickup-filter-venue");
+            const visibleCount = document.getElementById("pickup-visible-count");
+            const rows = Array.from(table.querySelectorAll("tbody tr"));
+            const apply = () => {{
+              let shown = 0;
+              rows.forEach((row) => {{
+                const show =
+                  (!type.value || row.dataset.type === type.value) &&
+                  (!venue.value || row.dataset.venue === venue.value);
+                row.hidden = !show;
+                if (show) shown += 1;
+              }});
+              if (visibleCount) visibleCount.textContent = `表示 ${{shown}} / ${{rows.length}} 件`;
+            }};
+            [type, venue].forEach((item) => item.addEventListener("change", apply));
+            apply();
+          }})();
+          </script>
+        """,
+        "過去DBで穴予想の成績が良かった条件に合うレースだけを抽出します。通常予想とは別枠で確認してください。",
+    )
     body += section("予想タイプ別サマリー", table(
         ["予想タイプ", "件数", "平均スコア"],
         sorted(
