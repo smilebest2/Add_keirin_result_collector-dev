@@ -118,6 +118,8 @@ def is_safe_inline_html(value) -> bool:
         return False
     lower = value.lower()
     return value.startswith("<a ") or value.startswith('<div class="prediction-pick') or value.startswith('<details class="compact-reason"') or value.startswith('<details class="compact-components"') or (
+        value.startswith('<button class="live-odds-button"') and value.endswith("</button>") and "<script" not in lower
+    ) or (
         value.startswith('<span class="') and value.endswith("</span>") and "<script" not in lower
     )
 
@@ -164,6 +166,15 @@ def race_detail_href(race_id: str | None) -> str:
 
 def race_detail_link(race_id: str | None, label: str = "詳細") -> str:
     return f'<a class="detail-link" href="{race_detail_href(race_id)}">{h(label)}</a>'
+
+
+def live_odds_button(race_id: str | None) -> str:
+    if not race_id:
+        return ""
+    return (
+        '<button class="live-odds-button" type="button" '
+        f'data-live-odds-race-id="{h(race_id)}">直前再判定</button>'
+    )
 
 
 def section(title: str, html_body: str, intro: str = "") -> str:
@@ -673,7 +684,7 @@ def page(title: str, active: str, body: str) -> str:
       color: var(--muted);
       font-size: 12px;
     }}
-    #daily-recommendations td:nth-child(8) {{
+    #daily-recommendations td:nth-child(9) {{
       min-width: 260px;
       max-width: 520px;
       white-space: normal;
@@ -730,6 +741,148 @@ def page(title: str, active: str, body: str) -> str:
     }}
     .recommendation-toolbar strong {{
       color: var(--ink);
+    }}
+    .live-odds-button {{
+      min-height: 32px;
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      padding: 6px 10px;
+      background: #ffffff;
+      color: var(--accent);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+      white-space: nowrap;
+    }}
+    .live-odds-button:hover {{
+      background: var(--soft);
+    }}
+    .live-odds-panel {{
+      display: grid;
+      gap: 12px;
+      padding: 14px 15px 16px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }}
+    .live-odds-panel[hidden] {{
+      display: none;
+    }}
+    .live-odds-heading {{
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 10px;
+    }}
+    .live-odds-heading span {{
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }}
+    .live-odds-heading strong {{
+      display: block;
+      margin-top: 2px;
+      font-size: 18px;
+    }}
+    .live-odds-close {{
+      min-height: 32px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 5px 10px;
+      background: #ffffff;
+      color: var(--muted);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+    }}
+    .live-odds-state {{
+      color: var(--muted);
+      font-size: 13px;
+    }}
+    .live-odds-body {{
+      display: grid;
+      gap: 14px;
+    }}
+    .live-odds-grid {{
+      display: grid;
+      grid-template-columns: repeat(4, minmax(150px, 1fr));
+      gap: 10px;
+    }}
+    .decision-card.buy strong {{
+      color: #166534;
+    }}
+    .decision-card.no-value strong,
+    .decision-card.skip strong {{
+      color: #991b1b;
+    }}
+    .live-odds-list {{
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }}
+    .live-odds-list li {{
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px 10px;
+      background: #fbfcfd;
+      font-size: 13px;
+    }}
+    .live-odds-list strong {{
+      font-variant-numeric: tabular-nums;
+    }}
+    .live-odds-list span {{
+      color: var(--muted);
+      text-align: right;
+      white-space: nowrap;
+    }}
+    .live-odds-reasons {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }}
+    .live-odds-reasons li {{
+      border-radius: 999px;
+      padding: 4px 9px;
+      background: var(--soft-2);
+      color: var(--accent-2);
+      font-size: 12px;
+      font-weight: 700;
+    }}
+    .live-odds-market-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+    }}
+    .live-odds-market {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #ffffff;
+    }}
+    .live-odds-market h3 {{
+      margin: 0 0 8px;
+      font-size: 13px;
+    }}
+    .live-odds-market ol {{
+      display: grid;
+      gap: 6px;
+      margin: 0;
+      padding-left: 20px;
+      color: var(--muted);
+      font-size: 12px;
     }}
     .pill.buy {{
       background: #dcfce7;
@@ -1070,6 +1223,7 @@ def page(title: str, active: str, body: str) -> str:
       .bar-row {{ grid-template-columns: 96px minmax(130px, 1fr) 74px; }}
       .filters {{ grid-template-columns: repeat(2, minmax(120px, 1fr)); }}
       .decision-grid {{ grid-template-columns: repeat(2, minmax(120px, 1fr)); }}
+      .live-odds-grid {{ grid-template-columns: repeat(2, minmax(120px, 1fr)); }}
       .result-focus {{ grid-template-columns: 1fr; }}
       .prediction-type-grid {{ grid-template-columns: 1fr; }}
       .analysis-metrics {{ grid-template-columns: repeat(2, minmax(120px, 1fr)); }}
@@ -3937,6 +4091,176 @@ def recommendation_decision(row: dict, features: dict) -> tuple[str, str]:
     return "skip", "見送り"
 
 
+def live_odds_panel_html() -> str:
+    return """
+    <div id="live-odds-panel" class="live-odds-panel" hidden>
+      <div class="live-odds-heading">
+        <div>
+          <span>ローカル実行</span>
+          <strong id="live-odds-title">直前オッズ再判定</strong>
+        </div>
+        <button class="live-odds-close" type="button" id="live-odds-close">閉じる</button>
+      </div>
+      <div class="live-odds-state" id="live-odds-status"></div>
+      <div class="live-odds-body" id="live-odds-body"></div>
+    </div>
+    <script>
+    (() => {
+      const panel = document.getElementById("live-odds-panel");
+      const title = document.getElementById("live-odds-title");
+      const status = document.getElementById("live-odds-status");
+      const body = document.getElementById("live-odds-body");
+      const close = document.getElementById("live-odds-close");
+      if (!panel || !title || !status || !body) return;
+
+      const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      }[char]));
+      const pct = (value) => value === null || value === undefined || Number.isNaN(Number(value))
+        ? "-"
+        : `${Number(value).toFixed(1)}%`;
+      const num = (value, digits = 1) => value === null || value === undefined || Number.isNaN(Number(value))
+        ? "-"
+        : Number(value).toFixed(digits);
+      const endpointFor = (raceId) => {
+        const params = new URLSearchParams({ race_id: raceId });
+        if ((location.hostname === "127.0.0.1" || location.hostname === "localhost") && location.port) {
+          return `${location.origin}/api/live-odds?${params}`;
+        }
+        return `http://127.0.0.1:8787/api/live-odds?${params}`;
+      };
+      const statusClass = (value) => {
+        if (value === "buy") return "buy";
+        if (value === "no_value") return "no-value";
+        if (value === "skip" || value === "unknown") return "skip";
+        return "caution";
+      };
+      const renderTickets = (candidate) => {
+        const tickets = candidate?.tickets || [];
+        if (!tickets.length) return '<div class="inline-note">対象買い目はありません。</div>';
+        return `<ul class="live-odds-list">${tickets.map((ticket) => `
+          <li>
+            <strong>${escapeHtml(ticket.combination)}</strong>
+            <span>${escapeHtml(ticket.odds_label || "-")}倍 / 人気${escapeHtml(ticket.popularity ?? "-")}</span>
+          </li>`).join("")}</ul>`;
+      };
+      const renderReasons = (items) => {
+        const reasons = items || [];
+        if (!reasons.length) return "";
+        return `<ul class="live-odds-reasons">${reasons.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
+      };
+      const renderMarket = (marketTop) => {
+        const market = marketTop || {};
+        return `<div class="live-odds-market-grid">${Object.entries(market).map(([betType, items]) => `
+          <div class="live-odds-market">
+            <h3>${escapeHtml(betType)} 人気上位</h3>
+            <ol>${(items || []).map((item) => `
+              <li>${escapeHtml(item.combination)} ${escapeHtml(item.odds_label || "-")}倍</li>
+            `).join("") || "<li>-</li>"}</ol>
+          </div>`).join("")}</div>`;
+      };
+      const renderPredictions = (predictions) => {
+        const rows = predictions || [];
+        if (!rows.length) return "";
+        return `<ul class="live-odds-list">${rows.map((item) => `
+          <li>
+            <strong>${escapeHtml(item.prediction_type)}</strong>
+            <span>${escapeHtml(item.combo)} / ${escapeHtml(item.confidence)} / ${num(item.score)}</span>
+          </li>`).join("")}</ul>`;
+      };
+      const renderData = (data) => {
+        const race = data.race || {};
+        const odds = data.odds || {};
+        const decision = data.decision || {};
+        const rec = data.normal_recommendation || {};
+        const candidate = decision.candidate || {};
+        title.textContent = `${race.venue || ""} ${race.race_no || ""}R 直前オッズ再判定`;
+        const startLabel = race.start_status?.label || "";
+        status.textContent = `${startLabel} / 取得 ${odds.fetched_at || "-"} / オッズ更新 ${odds.odds_updated_at || "-"}`;
+        body.innerHTML = `
+          <div class="live-odds-grid">
+            <div class="decision-card ${statusClass(decision.status)}">
+              <span>直前判定</span>
+              <strong>${escapeHtml(decision.label || "-")}</strong>
+              <small>${escapeHtml(decision.summary || "")}</small>
+            </div>
+            <div class="decision-card">
+              <span>推奨券種</span>
+              <strong>${escapeHtml(candidate.bet_type || rec.bet_type || "見送り")}</strong>
+              <small>${escapeHtml((candidate.combinations || rec.combinations || []).join(" / ") || "-")}</small>
+            </div>
+            <div class="decision-card">
+              <span>期待値目安</span>
+              <strong>${pct(candidate.expected_roi)}</strong>
+              <small>平均オッズ ${num(candidate.average_odds)}倍</small>
+            </div>
+            <div class="decision-card">
+              <span>境界線</span>
+              <strong>${num(candidate.value_odds_line)}倍</strong>
+              <small>必要オッズ ${num(candidate.break_even_odds)}倍</small>
+            </div>
+          </div>
+          ${renderReasons(decision.reasons)}
+          <div>
+            <div class="rank-note">推奨買い目</div>
+            ${renderTickets(candidate)}
+          </div>
+          <div>
+            <div class="rank-note">朝時点の予想</div>
+            ${renderPredictions(data.predictions)}
+          </div>
+          <div>
+            <div class="rank-note">市場人気上位</div>
+            ${renderMarket(data.market_top)}
+          </div>
+        `;
+      };
+      const renderError = (message) => {
+        title.textContent = "直前オッズ再判定";
+        status.textContent = "ローカルAPIに接続できません。";
+        body.innerHTML = `
+          <div class="inline-note">
+            PowerShellで <code>python -m src.live_odds_server --port 8787</code> を起動し、
+            <code>http://127.0.0.1:8787/predictions.html</code> から開いてください。
+          </div>
+          <div class="operation-error">${escapeHtml(message)}</div>
+        `;
+      };
+
+      close?.addEventListener("click", () => {
+        panel.hidden = true;
+      });
+      document.addEventListener("click", async (event) => {
+        const button = event.target.closest("[data-live-odds-race-id]");
+        if (!button) return;
+        event.preventDefault();
+        const raceId = button.dataset.liveOddsRaceId;
+        panel.hidden = false;
+        title.textContent = "直前オッズ再判定";
+        status.textContent = "オッズ取得中...";
+        body.innerHTML = "";
+        panel.scrollIntoView({ behavior: "smooth", block: "start" });
+        button.disabled = true;
+        try {
+          const response = await fetch(endpointFor(raceId), { cache: "no-store" });
+          const data = await response.json();
+          if (!response.ok || !data.ok) throw new Error(data.error || `HTTP ${response.status}`);
+          renderData(data);
+        } catch (error) {
+          renderError(error.message || String(error));
+        } finally {
+          button.disabled = false;
+        }
+      });
+    })();
+    </script>
+    """
+
+
 def bet_recommendation_rows_for_date(conn, target_date: str | None) -> list[dict]:
     if not target_date:
         return []
@@ -3963,6 +4287,7 @@ def bet_recommendation_rows_for_date(conn, target_date: str | None) -> list[dict
         result.append({
             **row,
             "race": f'{row.get("venue") or ""} {row.get("race_no") or ""}R',
+            "live_odds": live_odds_button(row.get("race_id")),
             "decision": decision_label,
             "decision_display": pill(
                 decision_label,
@@ -4142,6 +4467,7 @@ def render_predictions(conn) -> str:
       <div class="card"><span>生成日時</span><strong>{h(latest_created or "-")}</strong></div>
     </div>
     """
+    body += live_odds_panel_html()
     recommendation_rows = bet_recommendation_rows_for_date(conn, target_date)
     if recommendation_rows:
         buy_count = sum(1 for row in recommendation_rows if row.get("_data", {}).get("decision") == "buy")
@@ -4170,6 +4496,7 @@ def render_predictions(conn) -> str:
                   [
                       "判定",
                       "レース",
+                      "直前",
                       "発走",
                       "推奨券種",
                       "買い目",
@@ -4181,6 +4508,7 @@ def render_predictions(conn) -> str:
                   [
                       "decision_display",
                       "race",
+                      "live_odds",
                       "start_time",
                       "recommended_bet_type",
                       "buy",
@@ -4334,6 +4662,7 @@ def render_predictions(conn) -> str:
             types = " ".join(group["predictions"].keys())
             cells = {
                 "race": f'{group["venue"]} {group["race_no"]}R',
+                "live_odds": live_odds_button(group["race_id"]),
                 "start_time": group["start_time"],
                 "lineup_text": group["lineup_text"],
                 "duplicate": "あり" if duplicate else "なし",
@@ -4358,9 +4687,9 @@ def render_predictions(conn) -> str:
               <label>重複買い目<select id="prediction-filter-duplicate"><option value="">すべて</option><option value="yes">あり</option><option value="no">なし</option></select></label>
             </div>
             {rich_table(
-                ["レース", "発走", "並び", *PREDICTION_TYPE_ORDER, "重複"],
+                ["レース", "直前", "発走", "並び", *PREDICTION_TYPE_ORDER, "重複"],
                 all_rows,
-                ["race", "start_time", "lineup_text", *PREDICTION_TYPE_ORDER, "duplicate"],
+                ["race", "live_odds", "start_time", "lineup_text", *PREDICTION_TYPE_ORDER, "duplicate"],
             ).replace("<table>", '<table id="all-race-predictions">', 1)}
           </details>
           <script>

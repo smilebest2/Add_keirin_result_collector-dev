@@ -18,6 +18,15 @@ python -m src.scraper
 python -m src.analysis
 ```
 
+直前オッズ再判定をローカルで確認する場合:
+
+```powershell
+python -m src.live_odds_server --port 8787
+```
+
+起動後、`http://127.0.0.1:8787/predictions.html` を開き、予想ページの「直前再判定」を押します。
+オッズ取得は押した1レースだけを対象にします。
+
 日付を指定する場合:
 
 ```powershell

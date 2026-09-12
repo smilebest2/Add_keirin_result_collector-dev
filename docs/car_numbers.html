@@ -470,7 +470,7 @@
       color: var(--muted);
       font-size: 12px;
     }
-    #daily-recommendations td:nth-child(8) {
+    #daily-recommendations td:nth-child(9) {
       min-width: 260px;
       max-width: 520px;
       white-space: normal;
@@ -527,6 +527,148 @@
     }
     .recommendation-toolbar strong {
       color: var(--ink);
+    }
+    .live-odds-button {
+      min-height: 32px;
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      padding: 6px 10px;
+      background: #ffffff;
+      color: var(--accent);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .live-odds-button:hover {
+      background: var(--soft);
+    }
+    .live-odds-panel {
+      display: grid;
+      gap: 12px;
+      padding: 14px 15px 16px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    .live-odds-panel[hidden] {
+      display: none;
+    }
+    .live-odds-heading {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 10px;
+    }
+    .live-odds-heading span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .live-odds-heading strong {
+      display: block;
+      margin-top: 2px;
+      font-size: 18px;
+    }
+    .live-odds-close {
+      min-height: 32px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 5px 10px;
+      background: #ffffff;
+      color: var(--muted);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .live-odds-state {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .live-odds-body {
+      display: grid;
+      gap: 14px;
+    }
+    .live-odds-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(150px, 1fr));
+      gap: 10px;
+    }
+    .decision-card.buy strong {
+      color: #166534;
+    }
+    .decision-card.no-value strong,
+    .decision-card.skip strong {
+      color: #991b1b;
+    }
+    .live-odds-list {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .live-odds-list li {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px 10px;
+      background: #fbfcfd;
+      font-size: 13px;
+    }
+    .live-odds-list strong {
+      font-variant-numeric: tabular-nums;
+    }
+    .live-odds-list span {
+      color: var(--muted);
+      text-align: right;
+      white-space: nowrap;
+    }
+    .live-odds-reasons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .live-odds-reasons li {
+      border-radius: 999px;
+      padding: 4px 9px;
+      background: var(--soft-2);
+      color: var(--accent-2);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .live-odds-market-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+    }
+    .live-odds-market {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #ffffff;
+    }
+    .live-odds-market h3 {
+      margin: 0 0 8px;
+      font-size: 13px;
+    }
+    .live-odds-market ol {
+      display: grid;
+      gap: 6px;
+      margin: 0;
+      padding-left: 20px;
+      color: var(--muted);
+      font-size: 12px;
     }
     .pill.buy {
       background: #dcfce7;
@@ -867,6 +1009,7 @@
       .bar-row { grid-template-columns: 96px minmax(130px, 1fr) 74px; }
       .filters { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
       .decision-grid { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+      .live-odds-grid { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
       .result-focus { grid-template-columns: 1fr; }
       .prediction-type-grid { grid-template-columns: 1fr; }
       .analysis-metrics { grid-template-columns: repeat(2, minmax(120px, 1fr)); }

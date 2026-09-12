@@ -470,7 +470,7 @@
       color: var(--muted);
       font-size: 12px;
     }
-    #daily-recommendations td:nth-child(8) {
+    #daily-recommendations td:nth-child(9) {
       min-width: 260px;
       max-width: 520px;
       white-space: normal;
@@ -527,6 +527,148 @@
     }
     .recommendation-toolbar strong {
       color: var(--ink);
+    }
+    .live-odds-button {
+      min-height: 32px;
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      padding: 6px 10px;
+      background: #ffffff;
+      color: var(--accent);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .live-odds-button:hover {
+      background: var(--soft);
+    }
+    .live-odds-panel {
+      display: grid;
+      gap: 12px;
+      padding: 14px 15px 16px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    .live-odds-panel[hidden] {
+      display: none;
+    }
+    .live-odds-heading {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 10px;
+    }
+    .live-odds-heading span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .live-odds-heading strong {
+      display: block;
+      margin-top: 2px;
+      font-size: 18px;
+    }
+    .live-odds-close {
+      min-height: 32px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 5px 10px;
+      background: #ffffff;
+      color: var(--muted);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .live-odds-state {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .live-odds-body {
+      display: grid;
+      gap: 14px;
+    }
+    .live-odds-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(150px, 1fr));
+      gap: 10px;
+    }
+    .decision-card.buy strong {
+      color: #166534;
+    }
+    .decision-card.no-value strong,
+    .decision-card.skip strong {
+      color: #991b1b;
+    }
+    .live-odds-list {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .live-odds-list li {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px 10px;
+      background: #fbfcfd;
+      font-size: 13px;
+    }
+    .live-odds-list strong {
+      font-variant-numeric: tabular-nums;
+    }
+    .live-odds-list span {
+      color: var(--muted);
+      text-align: right;
+      white-space: nowrap;
+    }
+    .live-odds-reasons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .live-odds-reasons li {
+      border-radius: 999px;
+      padding: 4px 9px;
+      background: var(--soft-2);
+      color: var(--accent-2);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .live-odds-market-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+    }
+    .live-odds-market {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #ffffff;
+    }
+    .live-odds-market h3 {
+      margin: 0 0 8px;
+      font-size: 13px;
+    }
+    .live-odds-market ol {
+      display: grid;
+      gap: 6px;
+      margin: 0;
+      padding-left: 20px;
+      color: var(--muted);
+      font-size: 12px;
     }
     .pill.buy {
       background: #dcfce7;
@@ -867,6 +1009,7 @@
       .bar-row { grid-template-columns: 96px minmax(130px, 1fr) 74px; }
       .filters { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
       .decision-grid { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+      .live-odds-grid { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
       .result-focus { grid-template-columns: 1fr; }
       .prediction-type-grid { grid-template-columns: 1fr; }
       .analysis-metrics { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
@@ -887,7 +1030,7 @@
   </header>
   <main>
     <div class="wrap">
-      <section><h2>データ品質サマリー</h2><table><thead><tr><th>項目</th><th>値</th></tr></thead><tbody><tr><td>総レース数</td><td>3,986</td></tr><tr><td>着順0件のレース</td><td>0</td></tr><tr><td>配当0件のレース</td><td>0</td></tr><tr><td>天候未取得</td><td>0</td></tr><tr><td>風速未取得</td><td>187</td></tr><tr><td>並び未取得</td><td>0</td></tr><tr><td>Playwright HTML保存日時</td><td>2026-09-12T00:30:21</td></tr></tbody></table></section><section><h2>会場別蓄積状況</h2><table><thead><tr><th>会場</th><th>レース数</th><th>最初の日付</th><th>最新日付</th></tr></thead><tbody><tr><td>玉野</td><td>202</td><td>2026-06-11</td><td>2026-09-10</td></tr><tr><td>弥彦</td><td>173</td><td>2026-06-12</td><td>2026-09-09</td></tr><tr><td>青森</td><td>168</td><td>2026-06-10</td><td>2026-09-06</td></tr><tr><td>武雄</td><td>167</td><td>2026-06-12</td><td>2026-09-11</td></tr><tr><td>松戸</td><td>165</td><td>2026-06-15</td><td>2026-09-03</td></tr><tr><td>伊東</td><td>162</td><td>2026-06-13</td><td>2026-09-09</td></tr><tr><td>京王閣</td><td>149</td><td>2026-06-10</td><td>2026-09-10</td></tr><tr><td>岐阜</td><td>147</td><td>2026-06-11</td><td>2026-09-01</td></tr><tr><td>奈良</td><td>136</td><td>2026-06-13</td><td>2026-09-11</td></tr><tr><td>富山</td><td>136</td><td>2026-06-16</td><td>2026-09-11</td></tr><tr><td>松阪</td><td>129</td><td>2026-06-15</td><td>2026-09-07</td></tr><tr><td>和歌山</td><td>126</td><td>2026-06-23</td><td>2026-09-01</td></tr><tr><td>岸和田</td><td>120</td><td>2026-06-16</td><td>2026-08-29</td></tr><tr><td>高知</td><td>120</td><td>2026-06-18</td><td>2026-09-11</td></tr><tr><td>大垣</td><td>115</td><td>2026-06-10</td><td>2026-09-09</td></tr><tr><td>函館</td><td>114</td><td>2026-06-14</td><td>2026-07-09</td></tr><tr><td>小倉</td><td>105</td><td>2026-06-18</td><td>2026-08-30</td></tr><tr><td>防府</td><td>104</td><td>2026-06-10</td><td>2026-09-06</td></tr><tr><td>取手</td><td>102</td><td>2026-06-13</td><td>2026-07-08</td></tr><tr><td>宇都宮</td><td>102</td><td>2026-06-10</td><td>2026-09-02</td></tr><tr><td>西武園</td><td>102</td><td>2026-08-21</td><td>2026-09-08</td></tr><tr><td>豊橋</td><td>102</td><td>2026-06-30</td><td>2026-09-11</td></tr><tr><td>久留米</td><td>96</td><td>2026-06-22</td><td>2026-09-07</td></tr><tr><td>小松島</td><td>96</td><td>2026-06-25</td><td>2026-08-29</td></tr><tr><td>松山</td><td>84</td><td>2026-06-19</td><td>2026-09-02</td></tr><tr><td>前橋</td><td>81</td><td>2026-06-10</td><td>2026-09-11</td></tr><tr><td>別府</td><td>75</td><td>2026-06-10</td><td>2026-07-06</td></tr><tr><td>平塚</td><td>72</td><td>2026-06-19</td><td>2026-07-02</td></tr><tr><td>川崎</td><td>70</td><td>2026-08-21</td><td>2026-09-11</td></tr><tr><td>いわき平</td><td>69</td><td>2026-06-10</td><td>2026-09-09</td></tr><tr><td>四日市</td><td>69</td><td>2026-08-29</td><td>2026-09-11</td></tr><tr><td>小田原</td><td>57</td><td>2026-06-14</td><td>2026-06-24</td></tr><tr><td>立川</td><td>57</td><td>2026-08-22</td><td>2026-09-05</td></tr><tr><td>静岡</td><td>54</td><td>2026-06-10</td><td>2026-09-01</td></tr><tr><td>熊本</td><td>48</td><td>2026-06-18</td><td>2026-08-26</td></tr><tr><td>佐世保</td><td>42</td><td>2026-06-28</td><td>2026-07-07</td></tr><tr><td>大宮</td><td>35</td><td>2026-07-01</td><td>2026-07-03</td></tr><tr><td>広島</td><td>35</td><td>2026-06-26</td><td>2026-07-09</td></tr></tbody></table></section><section><h2>直近ログ</h2><table><thead><tr><th>ログ</th></tr></thead><tbody><tr><td>2026-09-12 00:30:43,280 INFO root Saved race: 20260911_NAR_02</td></tr><tr><td>2026-09-12 00:30:43,554 INFO root Saved race: 20260911_NAR_03</td></tr><tr><td>2026-09-12 00:30:43,779 INFO root Saved race: 20260911_NAR_04</td></tr><tr><td>2026-09-12 00:30:43,980 INFO root Saved race: 20260911_NAR_05</td></tr><tr><td>2026-09-12 00:30:44,620 INFO root Saved race: 20260911_NAR_06</td></tr><tr><td>2026-09-12 00:30:44,831 INFO root Saved race: 20260911_NAR_07</td></tr><tr><td>2026-09-12 00:30:45,035 INFO root Saved race: 20260911_NAR_08</td></tr><tr><td>2026-09-12 00:30:45,242 INFO root Saved race: 20260911_NAR_09</td></tr><tr><td>2026-09-12 00:30:45,463 INFO root Saved race: 20260911_NAR_10</td></tr><tr><td>2026-09-12 00:30:45,710 INFO root Saved race: 20260911_NAR_11</td></tr><tr><td>2026-09-12 00:30:45,885 INFO root Saved race: 20260911_NAR_12</td></tr><tr><td>2026-09-12 00:30:46,167 INFO root Saved race: 20260911_MAE_01</td></tr><tr><td>2026-09-12 00:30:46,342 INFO root Saved race: 20260911_MAE_02</td></tr><tr><td>2026-09-12 00:30:46,538 INFO root Saved race: 20260911_MAE_03</td></tr><tr><td>2026-09-12 00:30:46,773 INFO root Saved race: 20260911_MAE_04</td></tr><tr><td>2026-09-12 00:30:47,054 INFO root Saved race: 20260911_MAE_05</td></tr><tr><td>2026-09-12 00:30:47,584 INFO root Saved race: 20260911_MAE_06</td></tr><tr><td>2026-09-12 00:30:47,858 INFO root Saved race: 20260911_MAE_07</td></tr><tr><td>2026-09-12 00:30:48,104 INFO root Saved race: 20260911_MAE_08</td></tr><tr><td>2026-09-12 00:30:48,378 INFO root Saved race: 20260911_MAE_09</td></tr><tr><td>2026-09-12 00:30:48,568 INFO root Saved race: 20260911_TOYOHASHI_01</td></tr><tr><td>2026-09-12 00:30:48,837 INFO root Saved race: 20260911_TOYOHASHI_02</td></tr><tr><td>2026-09-12 00:30:49,160 INFO root Saved race: 20260911_TOYOHASHI_03</td></tr><tr><td>2026-09-12 00:30:49,417 INFO root Saved race: 20260911_TOYOHASHI_04</td></tr><tr><td>2026-09-12 00:30:49,610 INFO root Saved race: 20260911_TOYOHASHI_05</td></tr><tr><td>2026-09-12 00:30:49,893 INFO root Saved race: 20260911_TOYOHASHI_06</td></tr><tr><td>2026-09-12 00:30:50,092 INFO root Saved race: 20260911_TOYOHASHI_07</td></tr><tr><td>2026-09-12 00:30:50,399 INFO root Saved race: 20260911_TOYOHASHI_08</td></tr><tr><td>2026-09-12 00:30:50,573 INFO root Saved race: 20260911_TOYOHASHI_09</td></tr><tr><td>2026-09-12 00:30:50,573 INFO root Completed: {&#x27;found&#x27;: 83, &#x27;saved&#x27;: 83, &#x27;skipped&#x27;: 0, &#x27;failed&#x27;: 0}</td></tr></tbody></table></section>
+      <section><h2>データ品質サマリー</h2><table><thead><tr><th>項目</th><th>値</th></tr></thead><tbody><tr><td>総レース数</td><td>3,986</td></tr><tr><td>着順0件のレース</td><td>0</td></tr><tr><td>配当0件のレース</td><td>0</td></tr><tr><td>天候未取得</td><td>0</td></tr><tr><td>風速未取得</td><td>187</td></tr><tr><td>並び未取得</td><td>0</td></tr><tr><td>Playwright HTML保存日時</td><td>2026-07-07T20:55:28</td></tr></tbody></table></section><section><h2>会場別蓄積状況</h2><table><thead><tr><th>会場</th><th>レース数</th><th>最初の日付</th><th>最新日付</th></tr></thead><tbody><tr><td>玉野</td><td>202</td><td>2026-06-11</td><td>2026-09-10</td></tr><tr><td>弥彦</td><td>173</td><td>2026-06-12</td><td>2026-09-09</td></tr><tr><td>青森</td><td>168</td><td>2026-06-10</td><td>2026-09-06</td></tr><tr><td>武雄</td><td>167</td><td>2026-06-12</td><td>2026-09-11</td></tr><tr><td>松戸</td><td>165</td><td>2026-06-15</td><td>2026-09-03</td></tr><tr><td>伊東</td><td>162</td><td>2026-06-13</td><td>2026-09-09</td></tr><tr><td>京王閣</td><td>149</td><td>2026-06-10</td><td>2026-09-10</td></tr><tr><td>岐阜</td><td>147</td><td>2026-06-11</td><td>2026-09-01</td></tr><tr><td>奈良</td><td>136</td><td>2026-06-13</td><td>2026-09-11</td></tr><tr><td>富山</td><td>136</td><td>2026-06-16</td><td>2026-09-11</td></tr><tr><td>松阪</td><td>129</td><td>2026-06-15</td><td>2026-09-07</td></tr><tr><td>和歌山</td><td>126</td><td>2026-06-23</td><td>2026-09-01</td></tr><tr><td>岸和田</td><td>120</td><td>2026-06-16</td><td>2026-08-29</td></tr><tr><td>高知</td><td>120</td><td>2026-06-18</td><td>2026-09-11</td></tr><tr><td>大垣</td><td>115</td><td>2026-06-10</td><td>2026-09-09</td></tr><tr><td>函館</td><td>114</td><td>2026-06-14</td><td>2026-07-09</td></tr><tr><td>小倉</td><td>105</td><td>2026-06-18</td><td>2026-08-30</td></tr><tr><td>防府</td><td>104</td><td>2026-06-10</td><td>2026-09-06</td></tr><tr><td>取手</td><td>102</td><td>2026-06-13</td><td>2026-07-08</td></tr><tr><td>宇都宮</td><td>102</td><td>2026-06-10</td><td>2026-09-02</td></tr><tr><td>西武園</td><td>102</td><td>2026-08-21</td><td>2026-09-08</td></tr><tr><td>豊橋</td><td>102</td><td>2026-06-30</td><td>2026-09-11</td></tr><tr><td>久留米</td><td>96</td><td>2026-06-22</td><td>2026-09-07</td></tr><tr><td>小松島</td><td>96</td><td>2026-06-25</td><td>2026-08-29</td></tr><tr><td>松山</td><td>84</td><td>2026-06-19</td><td>2026-09-02</td></tr><tr><td>前橋</td><td>81</td><td>2026-06-10</td><td>2026-09-11</td></tr><tr><td>別府</td><td>75</td><td>2026-06-10</td><td>2026-07-06</td></tr><tr><td>平塚</td><td>72</td><td>2026-06-19</td><td>2026-07-02</td></tr><tr><td>川崎</td><td>70</td><td>2026-08-21</td><td>2026-09-11</td></tr><tr><td>いわき平</td><td>69</td><td>2026-06-10</td><td>2026-09-09</td></tr><tr><td>四日市</td><td>69</td><td>2026-08-29</td><td>2026-09-11</td></tr><tr><td>小田原</td><td>57</td><td>2026-06-14</td><td>2026-06-24</td></tr><tr><td>立川</td><td>57</td><td>2026-08-22</td><td>2026-09-05</td></tr><tr><td>静岡</td><td>54</td><td>2026-06-10</td><td>2026-09-01</td></tr><tr><td>熊本</td><td>48</td><td>2026-06-18</td><td>2026-08-26</td></tr><tr><td>佐世保</td><td>42</td><td>2026-06-28</td><td>2026-07-07</td></tr><tr><td>大宮</td><td>35</td><td>2026-07-01</td><td>2026-07-03</td></tr><tr><td>広島</td><td>35</td><td>2026-06-26</td><td>2026-07-09</td></tr></tbody></table></section><section><h2>直近ログ</h2><table><thead><tr><th>ログ</th></tr></thead><tbody><tr><td>2026-07-07 20:56:30,795 INFO root Saved race: 20260705_TOYOHASHI_03</td></tr><tr><td>2026-07-07 20:56:31,809 INFO root Saved race: 20260705_TOYOHASHI_04</td></tr><tr><td>2026-07-07 20:56:33,117 INFO root Saved race: 20260705_TOYOHASHI_05</td></tr><tr><td>2026-07-07 20:56:34,112 INFO root Saved race: 20260705_TOYOHASHI_06</td></tr><tr><td>2026-07-07 20:56:35,178 INFO root Saved race: 20260705_TOYOHASHI_07</td></tr><tr><td>2026-07-07 20:56:36,426 INFO root Saved race: 20260705_TOYOHASHI_08</td></tr><tr><td>2026-07-07 20:56:37,303 INFO root Saved race: 20260705_TOYOHASHI_09</td></tr><tr><td>2026-07-07 20:56:38,419 INFO root Saved race: 20260705_TOYOHASHI_10</td></tr><tr><td>2026-07-07 20:56:39,178 INFO root Saved race: 20260705_TOYOHASHI_11</td></tr><tr><td>2026-07-07 20:56:40,130 INFO root Saved race: 20260705_TOYOHASHI_12</td></tr><tr><td>2026-07-07 20:56:40,902 INFO root Saved race: 20260705_WAK_01</td></tr><tr><td>2026-07-07 20:56:41,821 INFO root Saved race: 20260705_WAK_02</td></tr><tr><td>2026-07-07 20:56:42,892 INFO root Saved race: 20260705_WAK_03</td></tr><tr><td>2026-07-07 20:56:43,754 INFO root Saved race: 20260705_WAK_04</td></tr><tr><td>2026-07-07 20:56:44,500 INFO root Saved race: 20260705_WAK_05</td></tr><tr><td>2026-07-07 20:56:45,425 INFO root Saved race: 20260705_WAK_06</td></tr><tr><td>2026-07-07 20:56:46,538 INFO root Saved race: 20260705_WAK_07</td></tr><tr><td>2026-07-07 20:56:47,730 INFO root Saved race: 20260705_WAK_08</td></tr><tr><td>2026-07-07 20:56:48,745 INFO root Saved race: 20260705_WAK_09</td></tr><tr><td>2026-07-07 20:56:49,625 INFO root Saved race: 20260705_WAK_10</td></tr><tr><td>2026-07-07 20:56:50,808 INFO root Saved race: 20260705_WAK_11</td></tr><tr><td>2026-07-07 20:56:51,565 INFO root Saved race: 20260705_WAK_12</td></tr><tr><td>2026-07-07 20:56:52,442 INFO root Saved race: 20260705_SAS_01</td></tr><tr><td>2026-07-07 20:56:53,567 INFO root Saved race: 20260705_SAS_02</td></tr><tr><td>2026-07-07 20:56:54,566 INFO root Saved race: 20260705_SAS_03</td></tr><tr><td>2026-07-07 20:56:55,663 INFO root Saved race: 20260705_SAS_04</td></tr><tr><td>2026-07-07 20:56:56,615 INFO root Saved race: 20260705_SAS_05</td></tr><tr><td>2026-07-07 20:56:57,535 INFO root Saved race: 20260705_SAS_06</td></tr><tr><td>2026-07-07 20:56:58,739 INFO root Saved race: 20260705_SAS_07</td></tr><tr><td>2026-07-07 20:56:58,744 INFO root Completed: {&#x27;found&#x27;: 83, &#x27;saved&#x27;: 83, &#x27;skipped&#x27;: 0, &#x27;failed&#x27;: 0}</td></tr></tbody></table></section>
     </div>
   </main>
   <script>
