@@ -4694,105 +4694,6 @@ def render_prediction_results(conn) -> str:
       <div class="card"><span>集計日時</span><strong>{h(latest_checked or "-")}</strong></div>
     </div>
     """
-    body += """
-    <section>
-      <h2>データ更新状況</h2>
-      <p class="section-lead">公開JSONから、日次取得・予想生成・予想結果評価の進み具合を確認します。</p>
-      <div class="grid" id="prediction-result-freshness">
-        <div class="card"><span>生成日時</span><strong>-</strong></div>
-        <div class="card"><span>最新結果日</span><strong>-</strong></div>
-        <div class="card"><span>最新予想日</span><strong>-</strong></div>
-        <div class="card"><span>最新評価日</span><strong>-</strong></div>
-        <div class="card"><span>未評価予想</span><strong>-</strong></div>
-        <div class="card"><span>予想なし結果</span><strong>-</strong></div>
-      </div>
-      <div class="inline-note" id="prediction-result-freshness-note">更新状況を読み込んでいます。</div>
-      <div id="prediction-result-daily-counts"></div>
-    </section>
-    <script>
-    (() => {
-      const freshness = document.getElementById("prediction-result-freshness");
-      const note = document.getElementById("prediction-result-freshness-note");
-      const daily = document.getElementById("prediction-result-daily-counts");
-      if (!freshness || !note || !daily) return;
-
-      const safe = (value) => value === undefined || value === null || value === "" ? "-" : String(value);
-      const number = (value) => Number(value || 0).toLocaleString("ja-JP");
-      const setCards = (summary) => {
-        const items = [
-          ["生成日時", summary.generated_at],
-          ["最新結果日", summary.latest_result_date],
-          ["最新予想日", summary.latest_prediction_date],
-          ["最新評価日", summary.latest_prediction_result_date],
-          ["未評価予想", number(summary.unevaluated_prediction_count)],
-          ["予想なし結果", number(summary.result_races_without_predictions)]
-        ];
-        freshness.innerHTML = items.map(([label, value]) => (
-          `<div class="card"><span>${label}</span><strong>${safe(value)}</strong></div>`
-        )).join("");
-      };
-      const renderDaily = (rows) => {
-        const latest = rows.slice(0, 10);
-        daily.innerHTML = `
-          <table>
-            <thead>
-              <tr>
-                <th>日付</th>
-                <th>番組</th>
-                <th>結果</th>
-                <th>予想</th>
-                <th>評価済み</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${latest.map((row) => `
-                <tr>
-                  <td>${safe(row.race_date)}</td>
-                  <td>${number(row.scheduled_races)}</td>
-                  <td>${number(row.result_races)}</td>
-                  <td>${number(row.predictions)}</td>
-                  <td>${number(row.prediction_results)}</td>
-                </tr>
-              `).join("")}
-            </tbody>
-          </table>
-        `;
-      };
-      const statusMessage = (summary) => {
-        const resultDate = summary.latest_result_date || "";
-        const evaluatedDate = summary.latest_prediction_result_date || "";
-        const predictionDate = summary.latest_prediction_date || "";
-        const unevaluated = Number(summary.unevaluated_prediction_count || 0);
-        const missingPredictions = Number(summary.result_races_without_predictions || 0);
-        const messages = [];
-        if (resultDate && evaluatedDate && resultDate > evaluatedDate) {
-          messages.push(`結果は ${resultDate} までありますが、予想結果評価は ${evaluatedDate} までです。`);
-        }
-        if (predictionDate && resultDate && predictionDate > resultDate) {
-          messages.push(`予想は ${predictionDate} まで作成済みです。結果反映後に評価されます。`);
-        }
-        if (unevaluated > 0) {
-          messages.push(`未評価予想が ${number(unevaluated)} 件あります。`);
-        }
-        if (missingPredictions > 0) {
-          messages.push(`結果はあるが予想がないレースが ${number(missingPredictions)} 件あります。`);
-        }
-        return messages.length ? messages.join(" ") : "日次取得、予想生成、予想結果評価は同期しています。";
-      };
-      Promise.all([
-        fetch("data/public_summary.json", { cache: "no-store" }).then((response) => response.json()),
-        fetch("data/daily_counts.json", { cache: "no-store" }).then((response) => response.json())
-      ]).then(([summary, counts]) => {
-        setCards(summary);
-        renderDaily(Array.isArray(counts) ? counts : []);
-        note.textContent = statusMessage(summary);
-      }).catch(() => {
-        note.textContent = "更新状況JSONを読み込めませんでした。";
-      });
-    })();
-    </script>
-    """
-
     def format_stats(items: list[dict]) -> list[dict]:
         formatted = []
         for row in sorted(items, key=lambda item: prediction_type_order(item["prediction_type"])):
@@ -4861,22 +4762,64 @@ def render_prediction_results(conn) -> str:
         }
         for row in recommendation_trend
     ]
-    recommendation_trend_section = section("buy recommendation trend", f"""
+    recommendation_trend_chart = []
+    for index, row in enumerate(recommendation_trend):
+        item = dict(row)
+        window = recommendation_trend[max(0, index - 6): index + 1]
+        window_tickets = sum(int(day.get("tickets") or 0) for day in window)
+        window_hits = sum(int(day.get("hits") or 0) for day in window)
+        window_stake = sum(int(day.get("stake_total") or 0) for day in window)
+        window_return = sum(int(day.get("return_total") or 0) for day in window)
+        item["buy_hit_rate_ma7"] = window_hits * 100 / window_tickets if window_tickets else None
+        item["buy_roi_ma7"] = window_return * 100 / window_stake if window_stake else None
+        item["break_even"] = 100
+        recommendation_trend_chart.append(item)
+    latest_recommendation_day = next(
+        (
+            row for row in reversed(recommendation_trend_chart)
+            if int(row.get("tickets") or 0) > 0
+        ),
+        None,
+    )
+    if latest_recommendation_day:
+        latest_recommendation_cards = f"""
+        <div class="grid">
+          <div class="card"><span>推奨結果日</span><strong>{h(latest_recommendation_day.get("race_date") or "-")}</strong></div>
+          <div class="card"><span>買い候補</span><strong>{h(number(latest_recommendation_day.get("buy_recommendations") or 0))}</strong></div>
+          <div class="card"><span>買い目数</span><strong>{h(number(latest_recommendation_day.get("tickets") or 0))}</strong></div>
+          <div class="card"><span>的中率</span><strong>{h(pct(latest_recommendation_day.get("buy_hit_rate")) or "-")}</strong></div>
+          <div class="card"><span>回収率</span><strong>{h(pct(latest_recommendation_day.get("buy_roi")) or "-")}</strong></div>
+          <div class="card"><span>7日 的中率</span><strong>{h(pct(latest_recommendation_day.get("buy_hit_rate_ma7")) or "-")}</strong></div>
+          <div class="card"><span>7日 回収率</span><strong>{h(pct(latest_recommendation_day.get("buy_roi_ma7")) or "-")}</strong></div>
+        </div>
+        """
+    else:
+        latest_recommendation_cards = '<div class="empty">推奨買い目の判定済みデータがありません。</div>'
+    recommendation_trend_section = section("推奨買い目の推移", f"""
+      {latest_recommendation_cards}
       <div class="grid two">
-        {section("ROI / hit rate", line_chart(
-            recommendation_trend,
+        {section("推奨買い目 的中率", line_chart(
+            recommendation_trend_chart,
             "race_date",
-            [("buy_roi", "buy ROI", "#d9480f"), ("buy_hit_rate", "buy hit rate", "#0f766e")],
+            [("buy_hit_rate", "日別", "#0f766e"), ("buy_hit_rate_ma7", "7日平均", "#1d4ed8")],
             30,
         ))}
-        {section("buy count", bar_chart(recommendation_trend, "race_date", "buy_recommendations", number, 30))}
+        {section("推奨買い目 回収率", line_chart(
+            recommendation_trend_chart,
+            "race_date",
+            [("buy_roi", "日別", "#d9480f"), ("buy_roi_ma7", "7日平均", "#0f766e"), ("break_even", "100%基準", "#64748b")],
+            30,
+        ))}
       </div>
-      {table(
-          ["date", "recommendations", "buy", "buy rate", "tickets", "hits", "hit rate", "stake", "return", "ROI"],
-          recommendation_trend_display,
-          ["race_date", "recommendations", "buy_recommendations", "buy_rate", "tickets", "hits", "buy_hit_rate", "stake_total", "return_total", "buy_roi"],
-      )}
-    """, "Shows whether the operational buy filters are improving daily buy-side ROI and hit rate.")
+      <details class="analysis-fold">
+        <summary>日別集計を開く</summary>
+        {table(
+            ["日付", "推奨", "買い候補", "買い候補率", "買い目数", "的中", "的中率", "投資額", "払戻額", "回収率"],
+            recommendation_trend_display,
+            ["race_date", "recommendations", "buy_recommendations", "buy_rate", "tickets", "hits", "buy_hit_rate", "stake_total", "return_total", "buy_roi"],
+        )}
+      </details>
+    """, "購入推奨だけの成績です。日別はブレるため、7日平均を併せて見ます。")
 
     bet_total_display = [
         {
@@ -4935,6 +4878,7 @@ def render_prediction_results(conn) -> str:
             key=lambda item: PREDICTION_BET_TYPES.index(item["bet_type"]) if item["bet_type"] in PREDICTION_BET_TYPES else 99,
         )
     ]
+    body += recommendation_trend_section
     body += section("予想結果グラフ", f"""
       <div class="result-graph-grid">
         {section("日別 的中率推移", line_chart(
@@ -5062,220 +5006,12 @@ def render_prediction_results(conn) -> str:
         ["prediction_type", "race", "start_time", "predicted", "actual", "judgment", "hit_1st", "hit_top3_count", "return_amount", "roi"],
     ), "予想ページの注目予想と同じ条件で、各タイプ3件まで答え合わせします。")
 
-    def risk_stats(group_expr: str, where_extra: str = "") -> list[dict]:
-        query = f"""
-            SELECT {group_expr} AS bucket,
-                   COUNT(*) AS predictions,
-                   SUM(r.hit_exact) AS exact_hits,
-                   ROUND(AVG(r.hit_exact) * 100, 1) AS exact_rate,
-                   ROUND(AVG(r.hit_1st) * 100, 1) AS first_rate,
-                   ROUND(AVG(r.hit_top3_count), 2) AS avg_top3_count,
-                   SUM(r.stake_amount) AS stake_total,
-                   SUM(r.return_amount) AS return_total,
-                   ROUND(SUM(r.return_amount) * 100.0 / NULLIF(SUM(r.stake_amount), 0), 1) AS roi
-            FROM race_prediction p
-            JOIN race_prediction_result r ON r.prediction_id = p.id
-            LEFT JOIN race_confidence c ON c.race_id = p.race_id
-            LEFT JOIN race_volatility_features v ON v.race_id = p.race_id
-            WHERE p.prediction_type = 'feature_line_mix'
-              AND COALESCE(p.sample_kind, 'live') = 'live'
-              {where_extra}
-            GROUP BY bucket
-            ORDER BY bucket
-        """
-        return [
-            {
-                "bucket": row["bucket"],
-                "predictions": row["predictions"],
-                "exact_hits": row["exact_hits"] or 0,
-                "exact_rate": pct(row["exact_rate"]),
-                "first_rate": pct(row["first_rate"]),
-                "avg_top3_count": decimal(row["avg_top3_count"], 2),
-                "stake_total": yen(row["stake_total"]),
-                "return_total": yen(row["return_total"]),
-                "roi": pct(row["roi"]),
-            }
-            for row in rows(conn, query)
-        ]
-
-    def condition_candidate_rows(recent: bool = False) -> list[dict]:
-        recent_clause = ""
-        params = ()
-        if recent and latest_result_date:
-            recent_clause = "AND p.race_date >= DATE(?, '-6 day')"
-            params = (latest_result_date,)
-        candidates = [
-            ("all", "all feature_line_mix", "1=1"),
-            ("ev06_vol_low", "EV >= 0.6 and volatility low", "c.expected_value_score >= 0.6 AND v.volatility_probability < 0.4"),
-            ("conf07_vol_low", "confidence >= 0.7 and volatility low", "c.confidence_score >= 0.7 AND v.volatility_probability < 0.4"),
-            ("conf06_ev06", "confidence >= 0.6 and EV >= 0.6", "c.confidence_score >= 0.6 AND c.expected_value_score >= 0.6"),
-            ("conf07_line23", "confidence >= 0.7 and line_count 2-3", "c.confidence_score >= 0.7 AND v.line_count BETWEEN 2 AND 3"),
-            ("line23_tanki2", "line_count 2-3 and tanki <= 2", "v.line_count BETWEEN 2 AND 3 AND v.tanki_count <= 2"),
-            ("maxline3", "max line members >= 3", "c.max_line_members >= 3"),
-            ("ev07", "EV >= 0.7", "c.expected_value_score >= 0.7"),
-            ("vol_low", "volatility low", "v.volatility_probability < 0.4"),
-        ]
-
-        def candidate_stats(condition: str) -> dict:
-            return rows(conn, f"""
-                SELECT COUNT(*) AS predictions,
-                       SUM(r.hit_exact) AS exact_hits,
-                       ROUND(AVG(r.hit_exact) * 100, 1) AS exact_rate,
-                       ROUND(AVG(r.hit_1st) * 100, 1) AS first_rate,
-                       ROUND(AVG(r.hit_top3_count), 2) AS avg_top3_count,
-                       SUM(r.stake_amount) AS stake_total,
-                       SUM(r.return_amount) AS return_total,
-                       ROUND(SUM(r.return_amount) * 100.0 / NULLIF(SUM(r.stake_amount), 0), 1) AS roi
-                FROM race_prediction p
-                JOIN race_prediction_result r ON r.prediction_id = p.id
-                LEFT JOIN race_confidence c ON c.race_id = p.race_id
-                LEFT JOIN race_volatility_features v ON v.race_id = p.race_id
-                WHERE p.prediction_type = 'feature_line_mix'
-                  AND COALESCE(p.sample_kind, 'live') = 'live'
-                  {recent_clause}
-                  AND ({condition})
-            """, params)[0]
-
-        baseline = candidate_stats("1=1")
-        baseline_predictions = int(baseline.get("predictions") or 0)
-        baseline_exact_rate = float(baseline.get("exact_rate") or 0)
-        display_rows = []
-        for _key, label, condition in candidates:
-            row = candidate_stats(condition)
-            predictions = int(row.get("predictions") or 0)
-            roi_value = row.get("roi")
-            exact_rate_value = float(row.get("exact_rate") or 0)
-            roi_float = float(roi_value) if roi_value is not None else None
-            if predictions < 30:
-                decision = pill("sample low", "warn")
-                rank = 3
-            elif roi_float is not None and roi_float >= 100 and exact_rate_value >= baseline_exact_rate:
-                decision = pill("buy candidate", "ok")
-                rank = 0
-            elif roi_float is not None and roi_float >= 70:
-                decision = pill("watch", "warn")
-                rank = 1
-            else:
-                decision = pill("skip", "low")
-                rank = 2
-            display_rows.append({
-                "decision": decision,
-                "condition": label,
-                "coverage": pct(predictions * 100 / baseline_predictions if baseline_predictions else None),
-                "predictions": number(predictions),
-                "exact_hits": number(row.get("exact_hits") or 0),
-                "exact_rate": pct(row.get("exact_rate")),
-                "first_rate": pct(row.get("first_rate")),
-                "avg_top3_count": decimal(row.get("avg_top3_count"), 2),
-                "stake_total": yen(row.get("stake_total")),
-                "return_total": yen(row.get("return_total")),
-                "roi": pct(row.get("roi")),
-                "_rank": rank,
-                "_roi": roi_float if roi_float is not None else -1,
-                "_predictions": predictions,
-            })
-        display_rows.sort(key=lambda row: (row["_rank"], -row["_roi"], -row["_predictions"]))
-        return display_rows
-
-    confidence_distribution_display = [
-        {
-            "bucket": row["bucket"],
-            "races": row["races"],
-            "avg_confidence": decimal(row["avg_confidence"], 3),
-            "avg_expected_value": decimal(row["avg_expected_value"], 3),
-        }
-        for row in rows(conn, """
-            SELECT CASE
-                     WHEN confidence_score >= 0.9 THEN '0.9-1.0'
-                     WHEN confidence_score >= 0.8 THEN '0.8-0.9'
-                     WHEN confidence_score >= 0.7 THEN '0.7-0.8'
-                     WHEN confidence_score >= 0.6 THEN '0.6-0.7'
-                     WHEN confidence_score >= 0.5 THEN '0.5-0.6'
-                     WHEN confidence_score >= 0.4 THEN '0.4-0.5'
-                     WHEN confidence_score >= 0.3 THEN '0.3-0.4'
-                     WHEN confidence_score >= 0.2 THEN '0.2-0.3'
-                     WHEN confidence_score >= 0.1 THEN '0.1-0.2'
-                     ELSE '0.0-0.1'
-                   END AS bucket,
-                   COUNT(*) AS races,
-                   ROUND(AVG(confidence_score), 3) AS avg_confidence,
-                   ROUND(AVG(expected_value_score), 3) AS avg_expected_value
-            FROM race_confidence
-            GROUP BY bucket
-            ORDER BY bucket
-        """)
-    ]
-    confidence_perf = risk_stats("""
-        CASE
-          WHEN c.confidence_score >= 0.9 THEN '0.9-1.0'
-          WHEN c.confidence_score >= 0.8 THEN '0.8-0.9'
-          WHEN c.confidence_score >= 0.7 THEN '0.7-0.8'
-          WHEN c.confidence_score >= 0.6 THEN '0.6-0.7'
-          WHEN c.confidence_score >= 0.5 THEN '0.5-0.6'
-          WHEN c.confidence_score >= 0.4 THEN '0.4-0.5'
-          WHEN c.confidence_score >= 0.3 THEN '0.3-0.4'
-          WHEN c.confidence_score >= 0.2 THEN '0.2-0.3'
-          WHEN c.confidence_score >= 0.1 THEN '0.1-0.2'
-          ELSE '0.0-0.1'
-        END
-    """, "AND c.race_id IS NOT NULL")
-    volatility_perf = risk_stats("""
-        CASE
-          WHEN v.volatility_probability >= 0.7 THEN 'high'
-          WHEN v.volatility_probability >= 0.4 THEN 'middle'
-          ELSE 'low'
-        END
-    """, "AND v.race_id IS NOT NULL")
-    max_line_perf = risk_stats("CAST(c.max_line_members AS TEXT)", "AND c.race_id IS NOT NULL")
-    line_count_perf = risk_stats("CAST(v.line_count AS TEXT)", "AND v.race_id IS NOT NULL")
-    tanki_count_perf = risk_stats("CAST(v.tanki_count AS TEXT)", "AND v.race_id IS NOT NULL")
-    expected_value_perf = risk_stats("""
-        CASE
-          WHEN c.expected_value_score >= 0.8 THEN '0.8-1.0'
-          WHEN c.expected_value_score >= 0.6 THEN '0.6-0.8'
-          WHEN c.expected_value_score >= 0.4 THEN '0.4-0.6'
-          WHEN c.expected_value_score >= 0.2 THEN '0.2-0.4'
-          ELSE '0.0-0.2'
-        END
-    """, "AND c.race_id IS NOT NULL")
-    risk_headers = ["区分", "予想数", "完全的中", "完全的中率", "1着率", "3着内平均", "投資", "払戻", "回収率"]
-    risk_fields = ["bucket", "predictions", "exact_hits", "exact_rate", "first_rate", "avg_top3_count", "stake_total", "return_total", "roi"]
-    condition_headers = ["decision", "condition", "coverage", "predictions", "exact hits", "exact rate", "1st rate", "avg top3", "stake", "return", "roi"]
-    condition_fields = ["decision", "condition", "coverage", "predictions", "exact_hits", "exact_rate", "first_rate", "avg_top3_count", "stake_total", "return_total", "roi"]
-    body += section("feature_line_mix buy condition candidates", f"""
-      <div class="grid two">
-        {section("Cumulative", rich_table(condition_headers, condition_candidate_rows(False), condition_fields))}
-        {section("Recent 7 days", rich_table(condition_headers, condition_candidate_rows(True), condition_fields))}
-      </div>
-    """, "Compares low-cost SQL filters so weekend analysis can choose buy/skip rules without extra GitHub Actions minutes.")
-    body += section("feature_line_mix 回収率改善分析", f"""
-      <div class="grid two">
-        {section("confidence_score分布", table(
-            ["区分", "レース数", "平均confidence", "平均期待値"],
-            confidence_distribution_display,
-            ["bucket", "races", "avg_confidence", "avg_expected_value"],
-        ))}
-        {section("confidence別成績", table(risk_headers, confidence_perf, risk_fields))}
-        {section("荒れる確率別成績", table(risk_headers, volatility_perf, risk_fields))}
-        {section("ライン人数別成績", table(risk_headers, max_line_perf, risk_fields))}
-        {section("分線数別成績", table(risk_headers, line_count_perf, risk_fields))}
-        {section("単騎数別成績", table(risk_headers, tanki_count_perf, risk_fields))}
-        {section("期待値スコア別成績", table(risk_headers, expected_value_perf, risk_fields))}
-      </div>
-    """, "feature_line_mixを買う/見送る条件を確認するための分析です。予想ロジック自体は変更せず、confidence・荒れ度・ライン構成ごとの回収率を比較します。")
-
-    result_dates = sorted(
-        {row.get("race_date") for row in all_result_rows if row.get("race_date")},
-        reverse=True,
-    )
-    date_options = "".join(
-        f'<option value="{h(item)}"{" selected" if item == latest_result_date else ""}>{h(item)}</option>'
-        for item in result_dates
-    )
     venues = sorted({row.get("venue") for row in all_result_rows if row.get("venue")})
     venue_options = "".join(f'<option value="{h(venue)}">{h(venue)}</option>' for venue in venues)
     grouped: dict[str, dict] = {}
     for row in all_result_rows:
+        if row.get("race_date") != latest_result_date:
+            continue
         race_id = row.get("race_id") or ""
         race_date = row.get("race_date") or ""
         group_key = f"{race_date}:{race_id}"
@@ -5329,9 +5065,8 @@ def render_prediction_results(conn) -> str:
             cells[prediction_type] = prediction_result_cell(predictions.get(prediction_type))
         all_rows.append(cells)
 
-    body += section("当日全レース予想 結果", f"""
+    body += section("最新日の全レース予想 結果", f"""
       <div class="filters" id="prediction-result-filters">
-        <label>日付<select id="result-filter-date">{date_options}</select></label>
         <label>会場<select id="result-filter-venue"><option value="">すべて</option>{venue_options}</select></label>
         <label>信頼度<select id="result-filter-confidence"><option value="">すべて</option><option value="A">A</option><option value="B">B</option><option value="C">C</option></select></label>
         <label>予想タイプ<select id="result-filter-type"><option value="">すべて</option>{''.join(f'<option value="{h(item)}">{h(item)}</option>' for item in PREDICTION_TYPE_ORDER)}</select></label>
@@ -5340,15 +5075,14 @@ def render_prediction_results(conn) -> str:
         <label>回収<select id="result-filter-return"><option value="">すべて</option><option value="yes">あり</option><option value="no">なし</option></select></label>
       </div>
       {rich_table(
-          ["日付", "レース", "発走", "結果", "並び", *PREDICTION_TYPE_ORDER, "重複"],
+          ["レース", "発走", "結果", "並び", *PREDICTION_TYPE_ORDER, "重複"],
           all_rows,
-          ["race_date", "race", "start_time", "actual", "lineup_text", *PREDICTION_TYPE_ORDER, "duplicate"],
+          ["race", "start_time", "actual", "lineup_text", *PREDICTION_TYPE_ORDER, "duplicate"],
       ).replace("<table>", '<table id="all-race-prediction-results">', 1)}
       <script>
       (() => {{
         const table = document.getElementById("all-race-prediction-results");
         if (!table) return;
-        const date = document.getElementById("result-filter-date");
         const venue = document.getElementById("result-filter-venue");
         const confidence = document.getElementById("result-filter-confidence");
         const type = document.getElementById("result-filter-type");
@@ -5359,7 +5093,6 @@ def render_prediction_results(conn) -> str:
         const apply = () => {{
           rows.forEach((row) => {{
             const show =
-              (!date.value || row.dataset.date === date.value) &&
               (!venue.value || row.dataset.venue === venue.value) &&
               (!confidence.value || (row.dataset.confidence || "").includes(confidence.value)) &&
               (!type.value || (row.dataset.type || "").includes(type.value)) &&
@@ -5369,11 +5102,11 @@ def render_prediction_results(conn) -> str:
             row.hidden = !show;
           }});
         }};
-        [date, venue, confidence, type, judgment, duplicate, returned].forEach((item) => item.addEventListener("change", apply));
+        [venue, confidence, type, judgment, duplicate, returned].forEach((item) => item.addEventListener("change", apply));
         apply();
       }})();
       </script>
-    """, "日付を切り替え、会場・R順で各レースの結果と5タイプの買い目を横並びで比較できます。")
+    """, "最新評価日の各レースについて、結果と予想タイプごとの当たり方を横並びで確認できます。")
 
     daily_type_section = section("日別 予想タイプ別成績", table(
         ["予想タイプ", "予想数", "完全的中", "完全的中率", "1着的中率", "3着内一致平均", "投資額", "払戻額", "回収率"],
@@ -5453,7 +5186,6 @@ def render_prediction_results(conn) -> str:
       {daily_type_section}
       {confidence_grid_section}
       {trend_section}
-      {recommendation_trend_section}
       {bet_total_section}
       {bet_daily_section}
       {total_type_section}
@@ -5470,96 +5202,6 @@ def render_prediction_results(conn) -> str:
             "dev環境のみ表示します。フィルタに合わせて指標、グラフ、ランキング、補正項目マップが変化します。",
         )
 
-    historical_rows = rows(conn, """
-        SELECT p.*, r.actual_1st, r.actual_2nd, r.actual_3rd,
-               r.actual_1st_candidates, r.actual_2nd_candidates,
-               r.actual_3rd_candidates, r.dead_heat,
-               r.hit_exact, r.hit_1st, r.hit_top2, r.hit_top3_count,
-               r.payout, r.return_amount, r.roi, r.checked_at,
-               COALESCE(s.venue, m.venue) AS venue,
-               COALESCE(s.race_no, m.race_no) AS race_no
-        FROM race_prediction p
-        JOIN race_prediction_result r ON r.prediction_id = p.id
-        LEFT JOIN race_schedule s ON s.race_id = p.race_id
-        LEFT JOIN race_master m ON m.race_id = p.race_id
-        ORDER BY p.race_date DESC, COALESCE(s.venue, m.venue),
-                 COALESCE(s.race_no, m.race_no), p.prediction_type
-        LIMIT 3000
-    """)
-    historical_bets = rows(conn, """
-        SELECT b.prediction_id, b.bet_type, b.combination,
-               r.hit, r.return_amount
-        FROM race_prediction_bet b
-        JOIN race_prediction_bet_result r ON r.prediction_bet_id = b.id
-        ORDER BY b.prediction_id,
-                 CASE b.bet_type
-                   WHEN '2車複' THEN 1 WHEN '2車単' THEN 2 WHEN 'ワイド' THEN 3
-                   WHEN '3連複' THEN 4 WHEN '3連単' THEN 5 ELSE 9 END,
-                 b.combination
-    """)
-    bets_by_prediction: dict[int, list[str]] = defaultdict(list)
-    for bet in historical_bets:
-        mark = "○" if bet.get("hit") else "×"
-        returned = f' {yen(bet.get("return_amount"))}' if bet.get("return_amount") else ""
-        bets_by_prediction[int(bet["prediction_id"])].append(
-            f'{bet["bet_type"]} {bet["combination"]}{mark}{returned}'
-        )
-
-    details = []
-    for row in historical_rows:
-        sample_kind = row.get("sample_kind") or "live"
-        race_label = f'{row.get("race_date") or ""} {row.get("venue") or ""} {row.get("race_no") or ""}R'
-        details.append({
-            "prediction_type": row["prediction_type"],
-            "race": race_detail_link(row.get("race_id"), race_label),
-            "sample_kind": sample_kind_labels.get(sample_kind, sample_kind),
-            "predicted": prediction_combo(row),
-            "actual": actual_combo(row),
-            "judgment": f'<span class="{"hit" if row.get("hit_exact") else "miss"}">{h(prediction_result_label(row))}</span>',
-            "hit_1st": "○" if row["hit_1st"] else "×",
-            "hit_top3_count": row["hit_top3_count"],
-            "payout": yen(row["payout"]),
-            "return_amount": yen(row["return_amount"]),
-            "roi": pct(row["roi"]),
-            "bet_results": " / ".join(bets_by_prediction.get(int(row["id"]), [])),
-            "_class": "sample-low" if sample_kind == "reference" else "",
-            "_data": {"date": row.get("race_date") or ""},
-        })
-    result_dates = sorted({row.get("race_date") for row in historical_rows if row.get("race_date")}, reverse=True)
-    date_options = "".join(f'<option value="{h(item)}">{h(item)}</option>' for item in result_dates)
-    history_section = section("予想結果 明細", f"""
-      <div class="filters">
-        <label>対象日
-          <select id="history-result-date">
-            <option value="">すべて</option>
-            {date_options}
-          </select>
-        </label>
-      </div>
-      {rich_table(
-          ["予想タイプ", "レース", "区分", "順位予想", "結果", "判定", "1着", "3着内一致", "3連単払戻", "回収額", "回収率", "賭式別結果"],
-          details,
-          ["prediction_type", "race", "sample_kind", "predicted", "actual", "judgment", "hit_1st", "hit_top3_count", "payout", "return_amount", "roi", "bet_results"],
-      ).replace("<table>", '<table id="prediction-result-history">', 1)}
-      <script>
-      (() => {{
-        const select = document.getElementById("history-result-date");
-        const table = document.getElementById("prediction-result-history");
-        if (!select || !table) return;
-        const rows = Array.from(table.querySelectorAll("tbody tr"));
-        const apply = () => rows.forEach((row) => {{
-          row.hidden = Boolean(select.value && row.dataset.date !== select.value);
-        }});
-        select.addEventListener("change", apply);
-      }})();
-      </script>
-    """, "日付を選ぶと、その日の全予想と5賭式の判定を確認できます。")
-    body += f"""
-    <details class="analysis-fold">
-      <summary>過去明細を開く</summary>
-      {history_section}
-    </details>
-    """
     return page("予想結果", "prediction-results", body)
 
 
