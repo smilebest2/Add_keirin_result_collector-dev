@@ -14,10 +14,19 @@ TRIFECTA = "3連単"
 STAKE_AMOUNT = 100
 MODEL_VERSION = "explainable-v6"
 BET_TYPES = ["2車複", "2車単", "ワイド", "3連複", "3連単"]
-RECOMMENDATION_MODEL_VERSION = "bet-fit-v4"
+RECOMMENDATION_MODEL_VERSION = "bet-fit-v5"
 SIMILAR_SAMPLE_MIN = 10
 SIMILAR_ROI_SAMPLE_MIN = 30
 SIMILAR_ROI_FLOOR = 70.0
+TRIFECTA_SAMPLE_MIN = 30
+TRIFECTA_HIT_RATE_FLOOR = 30.0
+TRIFECTA_ROI_FLOOR = 150.0
+TRIO_SAMPLE_MIN = 30
+TRIO_HIT_RATE_FLOOR = 30.0
+TRIO_ROI_FLOOR = 90.0
+TWO_PAIR_SAMPLE_MIN = 30
+TWO_PAIR_HIT_RATE_FLOOR = 20.0
+TWO_PAIR_ROI_FLOOR = 90.0
 
 PREDICTION_TYPES = [
     "本命予想",
@@ -73,6 +82,17 @@ def scalar(conn, sql: str, params=()):
     if row is None:
         return None
     return row[0]
+
+
+def race_entry_car_nos(conn, race_id: str) -> set[int]:
+    return {
+        int(row["car_no"])
+        for row in rows(
+            conn,
+            "SELECT car_no FROM race_entry WHERE race_id = ?",
+            (race_id,),
+        )
+    }
 
 
 def racer_history(conn, entry: dict, venue: str | None, target_date: str) -> dict:
@@ -219,26 +239,29 @@ def car_context(conn, race: dict, car_no: int, target_date: str) -> dict:
     }
 
 
-def lineup_positions(conn, race_id: str) -> dict[int, int]:
-    lineup = rows(
-        conn,
-        """
-        SELECT car_no, line_no, line_position
-        FROM race_lineup_forecast
-        WHERE race_id = ?
-        ORDER BY line_no, line_position
-        """,
-        (race_id,),
-    )
-    entry_car_nos = {
-        int(row["car_no"])
-        for row in rows(
+def normalized_lineup_rows(conn, race_id: str) -> tuple[list[dict], str | None]:
+    entry_car_nos = race_entry_car_nos(conn, race_id)
+    if not entry_car_nos:
+        return [], None
+    for table in ("race_line_features", "race_lineup_forecast"):
+        lineup = rows(
             conn,
-            "SELECT car_no FROM race_entry WHERE race_id = ?",
+            f"""
+            SELECT car_no, line_no, line_position
+            FROM {table}
+            WHERE race_id = ?
+            ORDER BY line_no, line_position, car_no
+            """,
             (race_id,),
         )
-    }
-    lineup = normalize_lineup(lineup, entry_car_nos)
+        lineup = normalize_lineup(lineup, entry_car_nos)
+        if lineup:
+            return lineup, table
+    return [], None
+
+
+def lineup_positions(conn, race_id: str) -> dict[int, int]:
+    lineup, _source = normalized_lineup_rows(conn, race_id)
     if not lineup:
         return {}
     return {
@@ -1071,31 +1094,14 @@ def recommendation_scored(scored: list[dict]) -> tuple[list[dict], str]:
 
 
 def lineup_context(conn, race_id: str, axis_car_no: int) -> dict:
-    lineup = rows(
-        conn,
-        """
-        SELECT car_no, line_no, line_position
-        FROM race_lineup_forecast
-        WHERE race_id = ?
-        ORDER BY line_no, line_position
-        """,
-        (race_id,),
-    )
-    entry_car_nos = {
-        int(row["car_no"])
-        for row in rows(
-            conn,
-            "SELECT car_no FROM race_entry WHERE race_id = ?",
-            (race_id,),
-        )
-    }
-    lineup = normalize_lineup(lineup, entry_car_nos)
+    lineup, source = normalized_lineup_rows(conn, race_id)
     if not lineup:
         return {
             "available": False,
             "line_count": None,
             "bunsen_count": None,
             "axis_followers": None,
+            "line_source": None,
         }
     line_sizes = {}
     for row in lineup:
@@ -1113,6 +1119,7 @@ def lineup_context(conn, race_id: str, axis_car_no: int) -> dict:
             if axis
             else None
         ),
+        "line_source": source,
     }
 
 
@@ -1381,11 +1388,70 @@ def classify_bet_fit(
             + float(ranked[0].get("recent_top3_rate") or 0) * 0.35
         ) >= 40,
     }
+
+    def similar_gate(bet_type: str) -> tuple[str | None, str | None, float]:
+        stats = similar_stats.get(
+            bet_type,
+            {"sample_count": 0, "hit_rate": None, "roi": None},
+        )
+        sample_count = int(stats.get("sample_count") or 0)
+        hit_rate = float(stats.get("hit_rate") or 0)
+        roi = stats.get("roi")
+        roi_floor = TRIO_ROI_FLOOR if bet_type == "3連複" else SIMILAR_ROI_FLOOR
+        if sample_count < SIMILAR_SAMPLE_MIN:
+            return "similar_sample_low", "類似レース実績が不足", roi_floor
+        if bet_type == TRIFECTA:
+            if sample_count < TRIFECTA_SAMPLE_MIN:
+                return "trifecta_sample_low", "3連単は類似レース実績が不足", TRIFECTA_ROI_FLOOR
+            if roi is None or float(roi) < TRIFECTA_ROI_FLOOR:
+                shown_roi = 0.0 if roi is None else float(roi)
+                return "similar_roi_below_floor", f"3連単の類似回収率が低い（{shown_roi:.1f}%）", TRIFECTA_ROI_FLOOR
+            if hit_rate < TRIFECTA_HIT_RATE_FLOOR:
+                return "trifecta_hit_rate_low", f"3連単の類似的中率が低い（{hit_rate:.1f}%）", TRIFECTA_ROI_FLOOR
+            if (
+                not line_info.get("available")
+                or int(line_info.get("axis_followers") or 0) < 1
+                or model_top3_stability < 75
+                or gap34 < 8
+            ):
+                return "trifecta_ordering_risk", "3連単は着順固定の根拠が不足", TRIFECTA_ROI_FLOOR
+        elif bet_type == "3連複":
+            if sample_count < TRIO_SAMPLE_MIN:
+                return "trio_sample_low", "3連複は類似レース実績が不足", TRIO_ROI_FLOOR
+            if roi is None or float(roi) < TRIO_ROI_FLOOR:
+                shown_roi = 0.0 if roi is None else float(roi)
+                return "similar_roi_below_floor", f"3連複の類似回収率が低い（{shown_roi:.1f}%）", TRIO_ROI_FLOOR
+            if hit_rate < TRIO_HIT_RATE_FLOOR:
+                return "trio_hit_rate_low", f"3連複の類似的中率が低い（{hit_rate:.1f}%）", TRIO_ROI_FLOOR
+        elif bet_type == "2車複":
+            if sample_count < TWO_PAIR_SAMPLE_MIN:
+                return "two_pair_sample_low", "2車複は類似レース実績が不足", TWO_PAIR_ROI_FLOOR
+            if roi is None or float(roi) < TWO_PAIR_ROI_FLOOR:
+                shown_roi = 0.0 if roi is None else float(roi)
+                return "similar_roi_below_floor", f"2車複の類似回収率が低い（{shown_roi:.1f}%）", TWO_PAIR_ROI_FLOOR
+            if hit_rate < TWO_PAIR_HIT_RATE_FLOOR:
+                return "two_pair_hit_rate_low", f"2車複の類似的中率が低い（{hit_rate:.1f}%）", TWO_PAIR_ROI_FLOOR
+        elif sample_count >= SIMILAR_ROI_SAMPLE_MIN and roi is not None and float(roi) < roi_floor:
+            return "similar_roi_below_floor", f"類似レースの回収率が低い（{float(roi):.1f}%）", roi_floor
+        return None, None, roi_floor
+
     eligible = [
         bet_type
         for bet_type in ("3連単", "3連複", "2車複", "ワイド")
         if structural_fit[bet_type] and suitability[bet_type] >= minimums[bet_type]
     ]
+    operational_rejections = {}
+    operational_eligible = []
+    for bet_type in eligible:
+        filter_code, filter_reason, roi_floor = similar_gate(bet_type)
+        if filter_code:
+            operational_rejections[bet_type] = {
+                "code": filter_code,
+                "reason": filter_reason,
+                "roi_floor": roi_floor,
+            }
+        else:
+            operational_eligible.append(bet_type)
     data_reasons = []
     if min_starts < 5:
         data_reasons.append("上位候補の過去出走数が少ない")
@@ -1398,15 +1464,17 @@ def classify_bet_fit(
     if chaos == "high":
         data_reasons.append("荒れ度が高い")
 
-    if not eligible or len(data_reasons) >= 2:
+    if not eligible or not operational_eligible or len(data_reasons) >= 2:
+        best_rejected_type = max(eligible, key=lambda item: suitability[item]) if eligible else None
+        rejection = operational_rejections.get(best_rejected_type or "", {})
         return {
             "bet_type": "見送り",
             "combinations": [],
             "confidence": "C",
             "score": max(suitability.values()),
             "reason": "",
-            "skip_reason": "、".join(data_reasons or ["全券種の適性が最低基準未満"]),
-            "similar": {"sample_count": 0, "hit_rate": None, "roi": None},
+            "skip_reason": "、".join(data_reasons or [rejection.get("reason") or "全券種の適性が最低基準未満"]),
+            "similar": similar_stats.get(best_rejected_type, {"sample_count": 0, "hit_rate": None, "roi": None}),
             "features": {
                 "field_size": len(ranked),
                 "gap12": gap12,
@@ -1419,15 +1487,21 @@ def classify_bet_fit(
                 "avg_competition_score": avg_competition_score,
                 "min_starts": min_starts,
                 "min_recent_starts": min_recent_starts,
+                "model_top3_stability": model_top3_stability,
                 "prediction_score": prediction_score,
                 "chaos_score": chaos_score,
                 "chaos_level": chaos,
                 "chaos_reasons": chaos_reasons,
+                "suitability": suitability,
+                "structural_fit": structural_fit,
+                "operational_rejections": operational_rejections,
+                "operational_filter": rejection.get("code"),
+                "operational_roi_floor": rejection.get("roi_floor"),
                 **line_info,
             },
         }
 
-    bet_type = max(eligible, key=lambda item: suitability[item])
+    bet_type = max(operational_eligible, key=lambda item: suitability[item])
     similar = similar_stats.get(
         bet_type,
         {"sample_count": 0, "hit_rate": None, "roi": None},

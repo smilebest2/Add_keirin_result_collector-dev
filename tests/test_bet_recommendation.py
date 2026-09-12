@@ -31,6 +31,16 @@ SIMILAR_EVIDENCE = {
     for bet_type in (TRIFECTA, TRIO, TWO_PAIR, WIDE)
 }
 
+STRONG_TRIFECTA_EVIDENCE = {
+    **SIMILAR_EVIDENCE,
+    TRIFECTA: {"sample_count": 60, "hit_rate": 35, "roi": 180},
+}
+
+STRONG_TRIO_EVIDENCE = {
+    **SIMILAR_EVIDENCE,
+    TRIO: {"sample_count": 60, "hit_rate": 35, "roi": 120},
+}
+
 
 class BetRecommendationTest(unittest.TestCase):
     def test_schema_contains_recommendation_table(self):
@@ -56,7 +66,7 @@ class BetRecommendationTest(unittest.TestCase):
         result = classify_bet_fit(
             scored,
             {"available": True, "line_count": 3, "bunsen_count": 3, "axis_followers": 1},
-            SIMILAR_EVIDENCE,
+            STRONG_TRIFECTA_EVIDENCE,
         )
         self.assertEqual(result["bet_type"], TRIFECTA)
         self.assertEqual(result["combinations"], ["1-2-3"])
@@ -71,7 +81,7 @@ class BetRecommendationTest(unittest.TestCase):
         result = classify_bet_fit(
             scored,
             {"available": True, "line_count": 3, "bunsen_count": 2, "axis_followers": 0},
-            SIMILAR_EVIDENCE,
+            STRONG_TRIO_EVIDENCE,
         )
         self.assertEqual(result["bet_type"], TRIO)
         self.assertEqual(result["combinations"], ["1=2=3"])

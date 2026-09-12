@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from src.prediction import MODEL_VERSION, confidence, entry_scores, lineup_position
+from src.prediction import MODEL_VERSION, confidence, entry_scores, lineup_context, lineup_position
 
 
 class PredictionTuningTest(unittest.TestCase):
@@ -82,6 +82,8 @@ class PredictionTuningTest(unittest.TestCase):
     def test_corrupt_lineup_is_ignored(self):
         class Connection:
             def execute(self, sql, params=()):
+                if "race_line_features" in sql:
+                    return Cursor([])
                 if "race_lineup_forecast" in sql:
                     return Cursor(
                         [
@@ -97,6 +99,8 @@ class PredictionTuningTest(unittest.TestCase):
     def test_valid_lineup_position_is_returned(self):
         class Connection:
             def execute(self, sql, params=()):
+                if "race_line_features" in sql:
+                    return Cursor([])
                 if "race_lineup_forecast" in sql:
                     return Cursor(
                         [
@@ -108,6 +112,50 @@ class PredictionTuningTest(unittest.TestCase):
                 return Cursor([{"car_no": 1}, {"car_no": 2}, {"car_no": 3}])
 
         self.assertEqual(lineup_position(Connection(), "test-race", 2), 2)
+
+    def test_line_features_are_preferred_for_lineup_position(self):
+        class Connection:
+            def execute(self, sql, params=()):
+                if "race_line_features" in sql:
+                    return Cursor(
+                        [
+                            {"car_no": 1, "line_no": 1, "line_position": 1},
+                            {"car_no": 2, "line_no": 1, "line_position": 2},
+                            {"car_no": 3, "line_no": 2, "line_position": 1},
+                        ]
+                    )
+                if "race_lineup_forecast" in sql:
+                    return Cursor(
+                        [
+                            {"car_no": 1, "line_no": 1, "line_position": 1},
+                            {"car_no": 2, "line_no": 2, "line_position": 1},
+                            {"car_no": 3, "line_no": 2, "line_position": 2},
+                        ]
+                    )
+                return Cursor([{"car_no": 1}, {"car_no": 2}, {"car_no": 3}])
+
+        self.assertEqual(lineup_position(Connection(), "test-race", 2), 2)
+
+    def test_line_context_reports_feature_source(self):
+        class Connection:
+            def execute(self, sql, params=()):
+                if "race_line_features" in sql:
+                    return Cursor(
+                        [
+                            {"car_no": 1, "line_no": 1, "line_position": 1},
+                            {"car_no": 2, "line_no": 1, "line_position": 2},
+                            {"car_no": 3, "line_no": 2, "line_position": 1},
+                        ]
+                    )
+                if "race_lineup_forecast" in sql:
+                    return Cursor([])
+                return Cursor([{"car_no": 1}, {"car_no": 2}, {"car_no": 3}])
+
+        context = lineup_context(Connection(), "test-race", 1)
+
+        self.assertTrue(context["available"])
+        self.assertEqual(context["line_source"], "race_line_features")
+        self.assertEqual(context["axis_followers"], 1)
 
 
 class Cursor:
