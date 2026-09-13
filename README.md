@@ -27,6 +27,14 @@ python -m src.live_odds_server --port 8787
 起動後、`http://127.0.0.1:8787/predictions.html` を開き、予想ページの「直前再判定」を押します。
 オッズ取得は押した1レースだけを対象にします。
 
+dev公開ページで直前オッズを反映する場合:
+
+1. GitHub Actionsの `Fetch Live Odds` を `race_id` 指定で手動実行します。
+2. workflowが `docs/data/live_odds/<race_id>.json` を更新します。
+3. 予想ページの「直前再判定」を押すと、その直前オッズJSONを表示します。
+
+GitHub Pagesは静的配信のため、公開ページのボタンから直接Python APIを起動することはできません。
+
 日付を指定する場合:
 
 ```powershell

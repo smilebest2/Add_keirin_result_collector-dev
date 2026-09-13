@@ -1041,7 +1041,7 @@
     <div id="live-odds-panel" class="live-odds-panel" hidden>
       <div class="live-odds-heading">
         <div>
-          <span>ローカル実行</span>
+          <span>直前データ</span>
           <strong id="live-odds-title">直前オッズ再判定</strong>
         </div>
         <button class="live-odds-close" type="button" id="live-odds-close">閉じる</button>
@@ -1071,12 +1071,28 @@
       const num = (value, digits = 1) => value === null || value === undefined || Number.isNaN(Number(value))
         ? "-"
         : Number(value).toFixed(digits);
+      const actionsUrl = "https://github.com/smilebest2/Add_keirin_result_collector-dev/actions/workflows/live-odds.yml";
+      const isLocalLiveOdds = () => (
+        (location.hostname === "127.0.0.1" || location.hostname === "localhost") && location.port
+      );
       const endpointFor = (raceId) => {
-        const params = new URLSearchParams({ race_id: raceId });
-        if ((location.hostname === "127.0.0.1" || location.hostname === "localhost") && location.port) {
+        if (isLocalLiveOdds()) {
+          const params = new URLSearchParams({ race_id: raceId });
           return `${location.origin}/api/live-odds?${params}`;
         }
-        return `http://127.0.0.1:8787/api/live-odds?${params}`;
+        return `data/live_odds/${encodeURIComponent(raceId)}.json?ts=${Date.now()}`;
+      };
+      const fetchJson = async (url) => {
+        const response = await fetch(url, { cache: "no-store" });
+        const text = await response.text();
+        let data = {};
+        try {
+          data = text ? JSON.parse(text) : {};
+        } catch (error) {
+          throw new Error(response.ok ? "JSONを解析できませんでした。" : `HTTP ${response.status}`);
+        }
+        if (!response.ok || !data.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        return data;
       };
       const statusClass = (value) => {
         if (value === "buy") return "buy";
@@ -1164,13 +1180,25 @@
           </div>
         `;
       };
-      const renderError = (message) => {
+      const renderError = (message, raceId) => {
         title.textContent = "直前オッズ再判定";
-        status.textContent = "ローカルAPIに接続できません。";
+        if (isLocalLiveOdds()) {
+          status.textContent = "ローカルAPIに接続できません。";
+          body.innerHTML = `
+            <div class="inline-note">
+              PowerShellで <code>python -m src.live_odds_server --port 8787</code> を起動し、
+              <code>http://127.0.0.1:8787/predictions.html</code> から開いてください。
+            </div>
+            <div class="operation-error">${escapeHtml(message)}</div>
+          `;
+          return;
+        }
+        status.textContent = "直前オッズJSONを取得できません。";
         body.innerHTML = `
           <div class="inline-note">
-            PowerShellで <code>python -m src.live_odds_server --port 8787</code> を起動し、
-            <code>http://127.0.0.1:8787/predictions.html</code> から開いてください。
+            GitHub Actionsの <a href="${actionsUrl}" target="_blank" rel="noopener">Fetch Live Odds</a>
+            を開き、race_id に <code>${escapeHtml(raceId)}</code> を指定して実行してください。
+            完了後、このボタンで最新の直前判定を表示できます。
           </div>
           <div class="operation-error">${escapeHtml(message)}</div>
         `;
@@ -1186,17 +1214,15 @@
         const raceId = button.dataset.liveOddsRaceId;
         panel.hidden = false;
         title.textContent = "直前オッズ再判定";
-        status.textContent = "オッズ取得中...";
+        status.textContent = isLocalLiveOdds() ? "オッズ取得中..." : "直前オッズJSON確認中...";
         body.innerHTML = "";
         panel.scrollIntoView({ behavior: "smooth", block: "start" });
         button.disabled = true;
         try {
-          const response = await fetch(endpointFor(raceId), { cache: "no-store" });
-          const data = await response.json();
-          if (!response.ok || !data.ok) throw new Error(data.error || `HTTP ${response.status}`);
+          const data = await fetchJson(endpointFor(raceId));
           renderData(data);
         } catch (error) {
-          renderError(error.message || String(error));
+          renderError(error.message || String(error), raceId);
         } finally {
           button.disabled = false;
         }

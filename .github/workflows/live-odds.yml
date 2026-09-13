@@ -1,0 +1,77 @@
+name: Fetch Live Odds
+
+on:
+  workflow_dispatch:
+    inputs:
+      race_id:
+        description: "Race ID, for example 20260912_KAW_01"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  live-odds:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    concurrency:
+      group: live-odds-${{ inputs.race_id }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore DB backup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "DB_RESTORE_STATUS=missing" >> "$GITHUB_ENV"
+          artifact="$(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts" --paginate \
+              --jq '.artifacts[] | select((.name == "keirin-db-backup" or .name == "keirin-db-core-backup" or .name == "keirin-db-restore-backup" or .name == "keirin-db-results-backup") and .expired == false) | [.created_at, .id, .name] | @tsv' \
+              | sort -r \
+              | head -n 1 || true
+          )"
+          if [ -n "$artifact" ]; then
+            artifact_id="$(echo "$artifact" | cut -f2)"
+            artifact_name="$(echo "$artifact" | cut -f3)"
+            echo "Restoring DB artifact ${artifact_name} (${artifact_id})."
+            mkdir -p data
+            restore_dir="data/.restore-db"
+            rm -rf "$restore_dir"
+            mkdir -p "$restore_dir"
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "$restore_dir/db.zip"
+            unzip -q "$restore_dir/db.zip" -d "$restore_dir"
+            if [ -f "$restore_dir/keirin.db" ]; then
+              mv "$restore_dir/keirin.db" data/keirin.db
+              echo "DB_RESTORE_STATUS=restored" >> "$GITHUB_ENV"
+            fi
+            rm -rf "$restore_dir"
+          fi
+          if [ ! -f data/keirin.db ]; then
+            mkdir -p data
+            gh release download keirin-db-bootstrap --pattern keirin.db --dir data || true
+          fi
+          test -f data/keirin.db
+
+      - name: Fetch one race live odds
+        env:
+          RACE_ID: ${{ inputs.race_id }}
+        run: python -m src.live_odds_export --race-id "$RACE_ID"
+
+      - name: Commit live odds snapshot
+        uses: stefanzweifel/git-auto-commit-action@v7
+        with:
+          commit_message: "Update live odds snapshot"
+          file_pattern: docs/data/live_odds/*.json
