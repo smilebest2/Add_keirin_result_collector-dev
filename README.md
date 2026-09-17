@@ -33,6 +33,8 @@ dev公開ページで直前オッズを反映する場合:
 2. workflowが `docs/data/live_odds/<race_id>.json` を更新します。
 3. 予想ページの「直前再判定」を押すと、その直前オッズJSONを表示します。
 
+`Fetch Buy Candidate Live Odds` は、JST 10:00〜23:55に5分間隔で動きます。開始まで0〜6分の予想買い候補だけを対象に、最大5レース・処理予算55秒で直前オッズJSONを更新します。失敗しても日々の `Collect Keirin Results` には影響しません。
+
 GitHub Pagesは静的配信のため、公開ページのボタンから直接Python APIを起動することはできません。
 
 日付を指定する場合:

@@ -38,16 +38,17 @@ def odds_url_from_detail_url(url: str | None) -> str:
     return odds_url
 
 
-def fetch_html(url: str, retry: int = REQUEST_RETRY) -> str:
+def fetch_html(url: str, retry: int = REQUEST_RETRY, timeout: float = REQUEST_TIMEOUT) -> str:
     last_error = None
     for attempt in range(1, retry + 1):
         try:
-            response = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+            response = requests.get(url, headers=HEADERS, timeout=timeout)
             response.raise_for_status()
             return response.text
         except requests.RequestException as exc:
             last_error = exc
-            sleep(attempt)
+            if attempt < retry:
+                sleep(attempt)
     raise OddsFetchError(f"Failed to fetch odds page: {url}") from last_error
 
 
@@ -179,6 +180,6 @@ def parse_race_odds_html(html_text: str, source_url: str = "") -> dict:
     return normalize_odds_data(odds_data, source_url)
 
 
-def fetch_race_odds(url: str) -> dict:
+def fetch_race_odds(url: str, retry: int = REQUEST_RETRY, timeout: float = REQUEST_TIMEOUT) -> dict:
     odds_url = odds_url_from_detail_url(url)
-    return parse_race_odds_html(fetch_html(odds_url), odds_url)
+    return parse_race_odds_html(fetch_html(odds_url, retry=retry, timeout=timeout), odds_url)

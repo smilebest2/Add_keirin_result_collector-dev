@@ -1,0 +1,83 @@
+name: Fetch Buy Candidate Live Odds
+
+on:
+  schedule:
+    # Every 5 minutes from 10:00 to 23:55 JST. GitHub schedules can be delayed.
+    - cron: "*/5 1-14 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  live-odds-auto:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    concurrency:
+      group: live-odds-auto
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install live odds dependency
+        run: python -m pip install requests
+
+      - name: Restore DB backup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          artifact="$(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts" --paginate \
+              --jq '.artifacts[] | select((.name == "keirin-db-backup" or .name == "keirin-db-core-backup" or .name == "keirin-db-restore-backup" or .name == "keirin-db-results-backup") and .expired == false) | [.created_at, .id, .name] | @tsv' \
+              | sort -r \
+              | head -n 1 || true
+          )"
+          if [ -n "$artifact" ]; then
+            artifact_id="$(echo "$artifact" | cut -f2)"
+            artifact_name="$(echo "$artifact" | cut -f3)"
+            echo "Restoring DB artifact ${artifact_name} (${artifact_id})."
+            mkdir -p data
+            restore_dir="data/.restore-db"
+            rm -rf "$restore_dir"
+            mkdir -p "$restore_dir"
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "$restore_dir/db.zip"
+            unzip -q "$restore_dir/db.zip" -d "$restore_dir"
+            if [ -f "$restore_dir/keirin.db" ]; then
+              mv "$restore_dir/keirin.db" data/keirin.db
+            fi
+            rm -rf "$restore_dir"
+          fi
+          if [ ! -f data/keirin.db ]; then
+            mkdir -p data
+            gh release download keirin-db-bootstrap --pattern keirin.db --dir data || true
+          fi
+          test -f data/keirin.db
+
+      - name: Fetch buy candidate live odds
+        continue-on-error: true
+        run: >-
+          python -m src.live_odds_export
+          --auto-buy-candidates
+          --from-minutes 0
+          --window-minutes 6
+          --max-races 5
+          --budget-seconds 55
+          --request-timeout 8
+          --retry 1
+          --skip-existing-minutes 10
+
+      - name: Commit live odds snapshots
+        if: always()
+        uses: stefanzweifel/git-auto-commit-action@v7
+        with:
+          commit_message: "Update buy candidate live odds"
+          file_pattern: docs/data/live_odds/*.json

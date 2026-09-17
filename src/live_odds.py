@@ -384,7 +384,7 @@ def recommendation_summary(recommendation: dict | None) -> dict:
     }
 
 
-def live_odds_recheck(conn, race_id: str) -> dict:
+def live_odds_recheck(conn, race_id: str, retry: int | None = None, timeout: float | None = None) -> dict:
     race = row(
         conn,
         """
@@ -411,7 +411,12 @@ def live_odds_recheck(conn, race_id: str) -> dict:
         """,
         (race_id,),
     )
-    odds_snapshot = fetch_race_odds(race["detail_url"])
+    fetch_kwargs = {}
+    if retry is not None:
+        fetch_kwargs["retry"] = retry
+    if timeout is not None:
+        fetch_kwargs["timeout"] = timeout
+    odds_snapshot = fetch_race_odds(race["detail_url"], **fetch_kwargs)
     decision = evaluate_recommendation_with_odds(recommendation, odds_snapshot)
     return {
         "ok": True,
@@ -432,7 +437,7 @@ def live_odds_recheck(conn, race_id: str) -> dict:
     }
 
 
-def live_odds_recheck_by_id(race_id: str, db_path=DB_PATH) -> dict:
+def live_odds_recheck_by_id(race_id: str, db_path=DB_PATH, retry: int | None = None, timeout: float | None = None) -> dict:
     with connect(db_path) as conn:
         init_db(conn)
-        return live_odds_recheck(conn, race_id)
+        return live_odds_recheck(conn, race_id, retry=retry, timeout=timeout)
