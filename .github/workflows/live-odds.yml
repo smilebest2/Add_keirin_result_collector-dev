@@ -13,7 +13,31 @@ permissions:
   actions: read
 
 jobs:
+  check-daily-collection:
+    runs-on: ubuntu-22.04
+    outputs:
+      active: ${{ steps.check.outputs.active }}
+    steps:
+      - name: Check daily collection status
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          active=true
+          if runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/collect.yml/runs?per_page=30")"; then
+            active_count="$(printf '%s' "$runs" | jq '[.workflow_runs[] | select(.status != "completed")] | length')"
+            if [ "$active_count" -eq 0 ]; then
+              active=false
+            fi
+          else
+            echo "Could not verify daily collection status; skipping live odds for safety."
+          fi
+          echo "active=$active" >> "$GITHUB_OUTPUT"
+          echo "Daily collection active: $active" >> "$GITHUB_STEP_SUMMARY"
+
   live-odds:
+    needs: check-daily-collection
+    if: needs.check-daily-collection.outputs.active == 'false'
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     concurrency:
