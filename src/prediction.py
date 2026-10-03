@@ -1710,7 +1710,12 @@ def ensure_prediction_bets(conn) -> int:
         """
         SELECT id, race_id, race_date, prediction_type,
                predicted_1st, predicted_2nd, predicted_3rd, created_at
-        FROM race_prediction
+        FROM race_prediction p
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM race_prediction_bet b
+            WHERE b.prediction_id = p.id
+        )
         """,
     )
     for prediction in predictions:

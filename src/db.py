@@ -532,6 +532,14 @@ CREATE INDEX IF NOT EXISTS idx_race_prediction_bet_result_lookup
     ON race_prediction_bet_result(prediction_bet_id);
 CREATE INDEX IF NOT EXISTS idx_race_entry_race_id
     ON race_entry(race_id);
+CREATE INDEX IF NOT EXISTS idx_race_master_date
+    ON race_master(race_date, race_id);
+CREATE INDEX IF NOT EXISTS idx_race_result_racer_history
+    ON race_result(racer_name, prefecture, term, race_id, rank);
+CREATE INDEX IF NOT EXISTS idx_race_result_race_rank
+    ON race_result(race_id, rank, car_no);
+CREATE INDEX IF NOT EXISTS idx_payout_race_bet_combination
+    ON payout(race_id, bet_type, combination);
 CREATE INDEX IF NOT EXISTS idx_race_line_features_racer
     ON race_line_features(racer_name, prefecture, term);
 CREATE INDEX IF NOT EXISTS idx_racer_line_condition_stats_lookup
