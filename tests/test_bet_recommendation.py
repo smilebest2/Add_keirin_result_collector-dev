@@ -162,6 +162,49 @@ class BetRecommendationTest(unittest.TestCase):
         self.assertEqual(result["combinations"], [])
         self.assertTrue(result["skip_reason"])
 
+    def test_axis_in_third_line_position_is_skipped(self):
+        scored = [
+            scored_row(1, 80, top3=80, recent_top3=80),
+            scored_row(2, 75),
+            scored_row(3, 70),
+            scored_row(4, 68),
+        ]
+        result = classify_bet_fit(
+            scored,
+            {
+                "available": True,
+                "line_count": 3,
+                "bunsen_count": 2,
+                "axis_followers": 0,
+                "axis_line_position": 3,
+            },
+            SIMILAR_EVIDENCE,
+        )
+        self.assertEqual(result["combinations"], [])
+        self.assertIn("三番手以降", result["skip_reason"])
+
+    def test_opening_day_special_race_is_skipped(self):
+        scored = [
+            scored_row(1, 80, top3=80, recent_top3=80),
+            scored_row(2, 75),
+            scored_row(3, 70),
+            scored_row(4, 68),
+        ]
+        result = classify_bet_fit(
+            scored,
+            {
+                "available": True,
+                "line_count": 3,
+                "bunsen_count": 2,
+                "axis_followers": 1,
+                "axis_line_position": 1,
+                "race_class": "初日特選",
+            },
+            SIMILAR_EVIDENCE,
+        )
+        self.assertEqual(result["combinations"], [])
+        self.assertIn("初日特選", result["skip_reason"])
+
 
 class OperationalRecommendationTest(unittest.TestCase):
     def test_low_similar_roi_is_skipped_even_with_enough_samples(self):

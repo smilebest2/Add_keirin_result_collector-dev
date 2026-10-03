@@ -1101,6 +1101,7 @@ def lineup_context(conn, race_id: str, axis_car_no: int) -> dict:
             "line_count": None,
             "bunsen_count": None,
             "axis_followers": None,
+            "axis_line_position": None,
             "line_source": None,
         }
     line_sizes = {}
@@ -1119,6 +1120,7 @@ def lineup_context(conn, race_id: str, axis_car_no: int) -> dict:
             if axis
             else None
         ),
+        "axis_line_position": int(axis["line_position"]) if axis else None,
         "line_source": source,
     }
 
@@ -1463,8 +1465,16 @@ def classify_bet_fit(
         data_reasons.append("評価上位3車の安定度が低い")
     if chaos == "high":
         data_reasons.append("荒れ度が高い")
+    hard_exclusion = False
+    if int(line_info.get("axis_line_position") or 0) >= 3:
+        data_reasons.append("軸候補がライン三番手以降")
+        hard_exclusion = True
+    race_class = str(line_info.get("race_class") or "")
+    if "初日特選" in race_class or "初特選" in race_class:
+        data_reasons.append("初日特選は軸飛び実績が高い")
+        hard_exclusion = True
 
-    if not eligible or not operational_eligible or len(data_reasons) >= 2:
+    if not eligible or not operational_eligible or len(data_reasons) >= 2 or hard_exclusion:
         best_rejected_type = max(eligible, key=lambda item: suitability[item]) if eligible else None
         rejection = operational_rejections.get(best_rejected_type or "", {})
         return {
@@ -1655,6 +1665,7 @@ def save_bet_recommendations(
         base_ranked = sorted(operational_scored, key=lambda row: row["base_score"], reverse=True)
         prediction_score = sum(float(row["base_score"]) for row in base_ranked[:3])
         line_info = lineup_context(conn, race["race_id"], int(base_ranked[0]["car_no"]))
+        line_info["race_class"] = race.get("race_class") or ""
         similar_stats = similar_bet_stats(
             conn,
             race,
