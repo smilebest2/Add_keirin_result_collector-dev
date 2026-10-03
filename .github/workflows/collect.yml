@@ -4,8 +4,8 @@ on:
   schedule:
     # 07:30 JST. GitHub Actions scheduled runs can be delayed during busy periods.
     - cron: "30 22 * * *"
-    # Temporary recovery run at 20:25 JST on 2026-10-03; remove after dispatch.
-    - cron: "25 11 * * *"
+    # Temporary recovery run at 21:10 JST on 2026-10-03; remove after dispatch.
+    - cron: "10 12 * * *"
   workflow_dispatch:
     inputs:
       allow_fresh_db:
